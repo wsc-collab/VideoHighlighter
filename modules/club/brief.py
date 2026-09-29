@@ -16,7 +16,7 @@ in the brief, and they are not copied up into the title.
 
     BRAND: tier1
     TITLE: Private lesson with Coach John Wang
-    FONT: Interwald
+    FONT: Inter
     KEYWORDS: lesson, finish
     NOTES: Prefer windows where the coach is speaking.
 

@@ -262,18 +262,12 @@ def _fallback_font() -> str:
     return _font_path()
 
 
-# Drop the file in either place. The Mac user font folder is the usual
+# Drop Inter in either place. The Mac user font folder is the usual
 # install. ``fonts/`` next to this repo is the copy the club clone can carry.
-INTERWALD_INSTALL = "~/Library/Fonts/Interwald.otf"
+INTER_INSTALL = "~/Library/Fonts/Inter-Regular.otf"
 CLUB_FONTS_DIR = "fonts"
 
 _FONT_FILES = {
-    "interwald": (
-        "Interwald.otf",
-        "Interwald.ttf",
-        "Interwald-Regular.otf",
-        "Interwald-Regular.ttf",
-    ),
     "inter": (
         "Inter-Regular.otf",
         "Inter-Regular.ttf",
@@ -286,11 +280,10 @@ _FONT_FILES = {
 def font_for_brand(brand: str) -> str:
     """Default face when ``FONT`` is left blank.
 
-    Tier 1 (golf and tennis) uses Interwald. WSC and BSC use Inter.
+    WSC and BSC use Inter. Tier 1 uses Inter as well until a display face
+    is named. Interwald is not that face.
     """
-    if brand == "tier1":
-        return "Interwald"
-    if brand in {"wsc", "bsc"}:
+    if brand in {"tier1", "wsc", "bsc"}:
         return "Inter"
     return ""
 
@@ -304,7 +297,7 @@ def type_font(brief: Brief) -> str:
 
 
 def club_font_dirs() -> list[Path]:
-    """Folders checked for Interwald and Inter before fontconfig."""
+    """Folders checked for Inter before fontconfig."""
     home = Path.home()
     repo = Path(__file__).resolve().parents[2]
     windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
@@ -344,9 +337,9 @@ def resolve_font(spec: str, log_fn=print, search_dirs=None) -> str:
     """A ``.ttf``/``.otf``/``.ttc`` path for ``FONT``.
 
     A path that exists is used as given. Otherwise the string is a font
-    name. Interwald is looked up under ``~/Library/Fonts`` and ``fonts/``
-    in the clone, then by family name. If that file is missing, Inter is
-    used, then a bold sans already on the machine. The substitution is logged.
+    name. Inter is looked up under ``~/Library/Fonts`` and ``fonts/`` in
+    the clone, then by family name. If that file is missing, a bold sans
+    already on the machine is used, and the substitution is logged.
     """
     spec = (spec or "").strip().strip("\"'")
     directories = list(search_dirs) if search_dirs is not None else club_font_dirs()
@@ -354,16 +347,14 @@ def resolve_font(spec: str, log_fn=print, search_dirs=None) -> str:
         found = _lookup_font(spec, directories)
         if found:
             return found
-        if spec.casefold() == "interwald":
+        if spec.casefold() == "inter":
             log_fn(
-                "FONT 'Interwald' was not found. Install it at "
-                f"{INTERWALD_INSTALL} or as {CLUB_FONTS_DIR}/Interwald.otf "
-                "next to the app. Using Inter."
+                "FONT 'Inter' was not found. Install it at "
+                f"{INTER_INSTALL} or as {CLUB_FONTS_DIR}/Inter-Regular.otf "
+                "next to the app. Using a system sans."
             )
-            found = _lookup_font("Inter", directories)
-            if found:
-                return found
-        log_fn(f"FONT {spec!r} was not found; using a system sans.")
+        else:
+            log_fn(f"FONT {spec!r} was not found; using a system sans.")
     return _fallback_font()
 
 

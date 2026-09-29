@@ -443,7 +443,8 @@ def test_resolve_font_prefers_an_existing_file(tmp_path):
     assert resolve_font(str(font)) == str(font.resolve())
 
 
-def test_brand_picks_interwald_or_inter_and_interwald_can_fall_back(tmp_path):
+def test_brand_defaults_to_inter_for_tier1_wsc_and_bsc(tmp_path, monkeypatch):
+    from modules.club import brand as brand_mod
     from modules.club.brand import font_for_brand, resolve_font, type_font
     tier1 = parse_brief(
         "LENGTH: 20s\nSTYLE: talking\nBRAND: tier1\n"
@@ -451,12 +452,13 @@ def test_brand_picks_interwald_or_inter_and_interwald_can_fall_back(tmp_path):
     )
     assert tier1.brand == "tier1"
     assert tier1.font == ""
-    assert font_for_brand(tier1.brand) == "Interwald"
-    assert type_font(tier1) == "Interwald"
+    assert font_for_brand(tier1.brand) == "Inter"
+    assert type_font(tier1) == "Inter"
     wsc = parse_brief("LENGTH: 20s\nSTYLE: talking\nBRAND: wsc\nTITLE: Clinic\n")
     bsc = parse_brief("LENGTH: 20s\nSTYLE: talking\nBRAND: BSC\nTITLE: Clinic\n")
     assert type_font(wsc) == "Inter"
     assert type_font(bsc) == "Inter"
+    assert "Interwald" not in type_font(tier1)
     explicit = parse_brief(
         "LENGTH: 20s\nSTYLE: talking\nBRAND: tier1\nFONT: /tmp/Club.ttf\nTITLE: Hi\n"
     )
@@ -464,18 +466,18 @@ def test_brand_picks_interwald_or_inter_and_interwald_can_fall_back(tmp_path):
     with pytest.raises(BriefError):
         parse_brief("LENGTH: 10s\nSTYLE: talking\nBRAND: nike\n")
 
-    interwald = tmp_path / "Interwald.otf"
-    interwald.write_bytes(b"iw")
-    assert resolve_font("Interwald", search_dirs=[tmp_path]) == str(interwald.resolve())
-
-    other = tmp_path / "only-inter"
-    other.mkdir()
-    inter = other / "Inter-Regular.ttf"
+    inter = tmp_path / "Inter-Regular.otf"
     inter.write_bytes(b"in")
+    assert resolve_font("Inter", search_dirs=[tmp_path]) == str(inter.resolve())
+
+    empty = tmp_path / "no-inter"
+    empty.mkdir()
+    monkeypatch.setattr(brand_mod, "_fontconfig", lambda _name: "")
     notes = []
-    chosen = resolve_font("Interwald", log_fn=notes.append, search_dirs=[other])
-    assert chosen == str(inter.resolve())
-    assert any("Interwald" in line and "Inter" in line for line in notes)
+    chosen = resolve_font("Inter", log_fn=notes.append, search_dirs=[empty])
+    assert chosen
+    assert "Interwald" not in Path(chosen).name
+    assert any("system sans" in line for line in notes)
 
 
 TALKING = """\
