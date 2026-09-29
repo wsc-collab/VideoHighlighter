@@ -19,6 +19,59 @@ in the brief.
 
 The desktop highlighter is unchanged. Automated runs use the CLI below.
 
+## Two-step talking pick
+
+A person can choose the lines before anything is cut.
+
+1. **Transcript.** Whisper reads every clip in the folder and writes
+   `transcript.md` (readable, with times) and `transcript.json` (per file,
+   segment times, and word times). No `draft.mp4`.
+
+   ```bash
+   python -m modules.club pick "/path/to/clips"
+   python -m modules.club "/path/to/clips" --transcript-only
+   ```
+
+   The command prints `transcript.md: ...`. Show that file and ask which
+   lines to highlight, or skip and let the ranker choose.
+
+2. **Assemble.** Add the choice to `brief.md`, then run without `pick`.
+   The title, captions, and optional call to action are unchanged.
+
+   A quoted line or a short moment:
+
+   ```text
+   MUST_INCLUDE: "hold your finish"
+   ```
+
+   Several moments, one per line. A file name before the colon searches
+   only that clip:
+
+   ```text
+   MUST_INCLUDE:
+   - lesson.mp4: "hold your finish"
+   - we play at four
+   ```
+
+   Or a file and a range, in seconds or `m:ss`:
+
+   ```text
+   INCLUDE_WINDOWS:
+   lesson.mp4 0:12-0:18
+   rally.mov 12.0-18.5
+   ```
+
+   Those windows are cut in. The ranker fills whatever is left of
+   `LENGTH`. Leave both fields out and the ranker chooses on its own,
+   as before. A quote that is not in the transcript is listed in
+   `cuts.json` under `includes` and is not invented. An
+   `INCLUDE_WINDOWS` file that is not in the folder stops the run.
+
+   The assemble step reads `transcript.json` when it is already there, so
+   the folder is not transcribed again. `pick` hears every file, including
+   a quiet phone take. The assemble step still leaves that quiet file out
+   of the automatic fill. A highlight that names it is kept.
+
 ## brief.md
 
 Put `brief.md` in the clips folder. Length and style are required. The
@@ -98,6 +151,8 @@ CAPTION_POSITION: bottom
 | `LENGTH` | yes | Finished draft length. `20-35s` is a range. `30s` is exact. |
 | `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
+| `MUST_INCLUDE` | no | Quoted lines or short moments to force into the cut. Mapped to the transcript. One per line. |
+| `INCLUDE_WINDOWS` | no | `file start-end` ranges to force in. Seconds or `m:ss`. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
 | `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Bold white, horizontally centered, no stroke, no plate. Not a line from the transcript. |
 | `SUBTITLE` | no | Optional second line with the title. Same bold white, no stroke. |
@@ -180,9 +235,11 @@ Both read `/path/to/clips/brief.md` and write into that folder:
 
 | File | What it is |
 | --- | --- |
-| `draft.mp4` | The assembled review cut. Original audio from the clips. |
-| `cuts.json` | Windows in playback order: source file, start, end, score. |
+| `draft.mp4` | The assembled review cut. Original audio from the clips. Not written by `pick`. |
+| `cuts.json` | Windows in playback order: source file, start, end, score. Forced highlights are marked. |
 | `scores.json` | Every candidate window, which signals fired, and which were kept. |
+| `transcript.md` | Readable transcript with times. Written by `pick` / `--transcript-only`. |
+| `transcript.json` | The same transcript per file, with segment and word times. |
 
 Clips sit **in that folder**, not in subfolders. `mp4`, `mov`, `m4v`, `mkv`,
 `avi`, and `webm` are read. A previous `draft.mp4` is not treated as a source.
@@ -194,10 +251,14 @@ python -m modules.club ./clips --whisper-model tiny
 python -m modules.club ./clips --no-whisper
 python -m modules.club ./clips --brief ~/briefs/saturday.md --out ~/Desktop/out
 python -m modules.club ./clips --dry-run
+python -m modules.club pick ./clips
+python -m modules.club ./clips --transcript-only
 ```
 
 `--dry-run` writes the JSON and does not encode `draft.mp4`.
 `--no-whisper` ranks on audio peaks and motion only.
+`pick` and `--transcript-only` write `transcript.md` and `transcript.json`
+and do not assemble a draft. See [Two-step talking pick](#two-step-talking-pick).
 Exit code `0` means a draft plan with at least one cut was written.
 Exit code `2` means the folder or the brief could not be read.
 

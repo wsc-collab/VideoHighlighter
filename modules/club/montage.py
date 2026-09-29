@@ -16,6 +16,11 @@ pass draws that type on the assembled cut. ``STYLE: talking`` also burns
 captions of the speech between the title and the call to action. Those
 words come from local Whisper. ``NOTES`` is copied into the JSON for the
 editor. It is not a prompt and it is not caption text.
+
+``pick`` (or ``--transcript-only``) writes a transcript and stops, so a
+person can choose lines before anything is cut. ``MUST_INCLUDE`` and
+``INCLUDE_WINDOWS`` force those moments in. The ranker fills whatever
+is left of LENGTH. With neither field, the ranker chooses on its own.
 """
 
 from __future__ import annotations
@@ -36,6 +41,15 @@ import numpy as np
 
 from modules.club.brief import Brief, BriefError, load_brief
 from modules.club.brand import apply_brand, brand_record
+from modules.club.pick import (
+    ForcedSpan,
+    files_from_payload,
+    load_transcript,
+    render_transcript_md,
+    resolve_includes,
+    segments_of,
+    transcript_payload,
+)
 from modules.club.captions import (
     apply_talking_pack,
     caption_cues,
@@ -62,7 +76,7 @@ ASSEMBLE_ONLY = {
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 # Written into the clips folder on a previous run. Never a source.
-OUTPUT_NAMES = {"draft.mp4", "cuts.json", "scores.json"}
+OUTPUT_NAMES = {"draft.mp4", "cuts.json", "scores.json", "transcript.md", "transcript.json"}
 
 # (window seconds, hop seconds). Short punches for hype, longer holds for talk.
 STYLE_WINDOW = {
@@ -99,6 +113,8 @@ class Window:
     keyword_hits: list[str] = field(default_factory=list)
     score: float = 0.0
     trimmed: bool = False
+    forced: bool = False
+    include: str = ""
 
     @property
     def duration(self) -> float:
@@ -119,6 +135,9 @@ class Window:
             "trimmed": self.trimmed,
             "selected": selected,
         }
+        if self.forced:
+            payload["forced"] = True
+            payload["include"] = self.include
         if play_index is not None:
             payload["play_index"] = play_index
         return payload
@@ -342,16 +361,25 @@ def _same_source_overlap(a: Window, b: Window) -> bool:
     return a.source == b.source and a.start < b.end - 1e-3 and b.start < a.end - 1e-3
 
 
-def select_windows(windows: list[Window], min_s: float, max_s: float) -> list[Window]:
+def select_windows(
+    windows: list[Window],
+    min_s: float,
+    max_s: float,
+    target: float | None = None,
+) -> list[Window]:
     """Greedy non-overlapping pick until the middle of the requested range.
 
     The draft stays inside ``max_s``. Once ``min_s`` is met, a window that
     does not fit is skipped rather than trimmed. Below ``min_s``, the next
     window may be shortened to the remaining room when at least one second
     is left. The result is score order; callers reorder for playback.
+
+    ``target`` overrides the midpoint. Highlighted windows use that so the
+    filler stops where the original brief's midpoint still is.
     """
     ranked = sorted(windows, key=lambda w: (-w.score, w.source.casefold(), w.start))
-    target = (min_s + max_s) / 2.0
+    if target is None:
+        target = (min_s + max_s) / 2.0
     chosen: list[Window] = []
     total = 0.0
     for window in ranked:
@@ -379,12 +407,60 @@ def select_windows(windows: list[Window], min_s: float, max_s: float) -> list[Wi
                 keyword_hits=list(window.keyword_hits),
                 score=window.score,
                 trimmed=True,
+                forced=window.forced,
+                include=window.include,
             )
         chosen.append(piece)
         total += piece.duration
         if total >= target - 1e-6:
             break
     return chosen
+
+
+def select_with_forced(
+    windows: list[Window],
+    forced: list[Window],
+    min_s: float,
+    max_s: float,
+) -> list[Window]:
+    """Keep every highlighted window, then fill toward the brief's midpoint.
+
+    No highlights means the ranker alone, same as ``select_windows``.
+    Highlights that already reach the midpoint are not padded. They are
+    kept even when they run past ``max_s``: the person asked for those
+    moments. Filler windows that overlap a highlight are left out.
+    """
+    if not forced:
+        return select_windows(windows, min_s, max_s)
+    chosen = list(forced)
+    total = sum(window.duration for window in chosen)
+    midpoint = (min_s + max_s) / 2.0
+    if total >= midpoint - 1e-6 or total >= max_s - 0.05:
+        return chosen
+    pool = [
+        window for window in windows
+        if not any(_same_source_overlap(window, kept) for kept in chosen)
+    ]
+    room = max_s - total
+    filler_target = midpoint - total
+    filler = select_windows(pool, filler_target, max(filler_target, room), target=filler_target)
+    return chosen + filler
+
+
+def _forced_window(span: ForcedSpan) -> Window:
+    return Window(
+        source=span.source,
+        path=span.path,
+        start=span.start,
+        end=span.end,
+        audio=0.0,
+        motion=0.0,
+        speech=1.0,
+        keyword=0.0,
+        score=0.0,
+        forced=True,
+        include=span.include,
+    )
 
 
 def playback_order(windows: list[Window], style: str) -> list[Window]:
@@ -698,13 +774,30 @@ def run_club_montage(
                     f"({loudest} dB). Level only, not a picture match."
                 )
 
+    saved_payload = load_transcript(destination / "transcript.json")
+    saved_rows = {
+        row["source"].casefold(): row
+        for row in files_from_payload(saved_payload, clips)
+    }
+    if saved_payload:
+        log_fn("Using transcript.json for speech. The folder is not transcribed again.")
+
     clip_reports = []
     windows: list[Window] = []
+    durations: dict[str, float] = {}
+    heard: dict[str, list] = {}
     for path in clips:
         report = {"source": path.name, "duration_s": None, "error": None}
+        saved = saved_rows.get(path.name.casefold()) or {}
+        saved_segments = saved.get("segments")
         if path.name in dropped_set:
             report["skipped"] = "quiet"
             report["mean_volume_db"] = volumes.get(path.name)
+            if saved.get("duration_s"):
+                durations[path.name] = float(saved["duration_s"])
+                report["duration_s"] = _round(durations[path.name])
+            if saved_segments is not None:
+                heard[path.name] = list(saved_segments)
             clip_reports.append(report)
             continue
         try:
@@ -713,6 +806,7 @@ def run_club_montage(
             report["duration_s"] = _round(duration)
             if duration <= 0:
                 raise RuntimeError("duration is 0")
+            durations[path.name] = duration
             try:
                 peak_times = peaks_fn(str(path))
             except Exception as exc:
@@ -723,13 +817,16 @@ def run_club_montage(
             except Exception as exc:
                 log_fn(f"motion skipped for {path.name}: {exc}")
                 motion_series = []
-            segments = []
-            if use_whisper and whisper_status == whisper_model:
+            segments: list = []
+            if saved_segments is not None:
+                segments = list(saved_segments)
+            elif use_whisper and whisper_status == whisper_model:
                 try:
-                    segments = transcribe_live(str(path), whisper_model, log_fn) or []
+                    segments = segments_of(transcribe_live(str(path), whisper_model, log_fn))
                 except Exception as exc:
                     log_fn(f"whisper skipped for {path.name}: {exc}")
                     segments = []
+            heard[path.name] = segments
             found = score_windows_for_clip(
                 source=path.name,
                 path=str(path),
@@ -747,7 +844,35 @@ def run_club_montage(
             log_fn(f"  skipped {path.name}: {exc}")
         clip_reports.append(report)
 
-    selected = select_windows(windows, brief.length_min_s, brief.length_max_s)
+    if brief.must_include or brief.include_windows:
+        for path in clips:
+            if durations.get(path.name, 0) > 0:
+                continue
+            try:
+                info = probe_fn(str(path))
+                durations[path.name] = float(info.get("duration") or 0)
+            except Exception as exc:
+                log_fn(f"duration skipped for {path.name}: {exc}")
+
+    transcript_files = [
+        {
+            "source": path.name,
+            "path": str(path),
+            "segments": heard.get(path.name, []),
+        }
+        for path in clips
+    ]
+    try:
+        spans, include_rows = resolve_includes(brief, transcript_files, durations, log_fn)
+    except ValueError as exc:
+        raise BriefError(str(exc)) from exc
+    forced = [_forced_window(span) for span in spans]
+    if forced:
+        log_fn(f"Forcing {len(forced)} highlighted window(s) into the cut.")
+
+    selected = select_with_forced(
+        windows, forced, brief.length_min_s, brief.length_max_s,
+    )
     ordered = playback_order(selected, brief.style)
     assembled = sum(w.duration for w in ordered)
     within = brief.length_min_s - 1e-3 <= assembled <= brief.length_max_s + 1e-3
@@ -766,6 +891,17 @@ def run_club_montage(
             selected=True,
             play_index=play_of[(chosen.source, round(chosen.start, 3))],
         ))
+    listed = {(row["source"], row["start"]) for row in rows}
+    for window in ordered:
+        if not window.forced:
+            continue
+        key = (window.source, _round(window.start))
+        if key in listed:
+            continue
+        rows.append(window.as_dict(
+            selected=True,
+            play_index=play_of[(window.source, round(window.start, 3))],
+        ))
 
     scores = {
         "policy": ASSEMBLE_ONLY,
@@ -774,7 +910,9 @@ def run_club_montage(
             "whisper": whisper_status,
             "audio_peaks": True,
             "motion": True,
+            "transcript": "reused" if saved_payload else ("live" if use_whisper else "off"),
         },
+        "includes": include_rows,
         "order": "chronological" if brief.style == "talking" else "score",
         "mic_preference": mic_preference,
         "clips": clip_reports,
@@ -797,6 +935,7 @@ def run_club_montage(
         "within_brief": scores["within_brief"],
         "notes": brief.notes,
         "keywords": list(brief.keywords),
+        "includes": include_rows,
         "mic_preference": mic_preference,
         "draft_written": False,
         "brand": brand_record(brief),
@@ -881,6 +1020,99 @@ def run_club_montage(
     return cuts
 
 
+def run_transcript(
+    folder: str | Path,
+    *,
+    out_dir: str | Path | None = None,
+    whisper_model: str = "base",
+    log_fn=print,
+    probe=None,
+    transcribe=None,
+) -> dict:
+    """Write ``transcript.md`` and ``transcript.json`` and do not assemble.
+
+    Every clip in the folder is heard, including a quiet phone take, so the
+    person can choose it or skip it. A brief is not required for this step.
+    """
+    root = Path(folder).expanduser().resolve()
+    if not root.is_dir():
+        raise BriefError(f"Clips folder does not exist: {root}")
+    destination = Path(out_dir).expanduser().resolve() if out_dir else root
+    destination.mkdir(parents=True, exist_ok=True)
+    probe_fn = probe or default_probe
+    transcribe_fn = transcribe or transcribe_captions
+    if transcribe is None:
+        try:
+            import whisper  # noqa: F401
+        except Exception as exc:
+            raise BriefError(f"Whisper unavailable ({exc}).") from exc
+
+    clips = list_clips(root)
+    log_fn(f"Transcript only: {len(clips)} clip(s). No draft will be assembled.")
+    log_fn(ASSEMBLE_ONLY["note"])
+    files = []
+    for path in clips:
+        row: dict = {
+            "source": path.name,
+            "path": str(path),
+            "duration_s": None,
+            "segments": [],
+            "error": None,
+        }
+        try:
+            info = probe_fn(str(path))
+            row["duration_s"] = _round(float(info.get("duration") or 0))
+        except Exception as exc:
+            log_fn(f"duration skipped for {path.name}: {exc}")
+        try:
+            row["segments"] = segments_of(transcribe_fn(str(path), whisper_model, log_fn))
+        except Exception as exc:
+            row["error"] = str(exc)
+            log_fn(f"whisper skipped for {path.name}: {exc}")
+        files.append(row)
+        log_fn(f"  {path.name}: {len(row['segments'])} lines")
+
+    payload = transcript_payload(files, whisper_model)
+    md_path = destination / "transcript.md"
+    json_path = destination / "transcript.json"
+    md_path.write_text(render_transcript_md(payload), encoding="utf-8")
+    _write_json(json_path, payload)
+    log_fn("Transcript only. No draft was assembled.")
+    log_fn(f"transcript.md: {md_path}")
+    log_fn(f"transcript.json: {json_path}")
+    log_fn(
+        "Show this transcript and ask which lines to highlight, or skip "
+        "and let the ranker choose."
+    )
+    return {
+        "transcript_md": str(md_path),
+        "transcript_json": str(json_path),
+        "whisper": whisper_model,
+        "files": payload["files"],
+        "draft_written": False,
+    }
+
+
+def _folder_from_args(parser, args) -> tuple[str | None, bool]:
+    """``(folder, transcript_only)`` from ``pick`` or ``--transcript-only``."""
+    positionals = list(args.folder or [])
+    transcript_only = bool(args.transcript_only)
+    if positionals and positionals[0] == "pick":
+        transcript_only = True
+        positionals = positionals[1:]
+    elif positionals and positionals[-1] == "pick":
+        transcript_only = True
+        positionals = positionals[:-1]
+    if len(positionals) > 1:
+        parser.error("give one clips folder")
+    folder = args.club or (positionals[0] if positionals else None)
+    # ``python main.py --club pick <folder>`` stores pick in --club.
+    if folder == "pick":
+        transcript_only = True
+        folder = positionals[0] if positionals else None
+    return folder, transcript_only
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry used by ``python -m modules.club`` and ``python main.py --club``."""
     parser = argparse.ArgumentParser(
@@ -888,10 +1120,15 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Assemble a talking cut from real clips and a brief.md. "
             "Burns a title, captions of the speech, and a call to action. "
+            "`pick` or --transcript-only writes a transcript and stops. "
             "Does not generate footage, faces, voices, or music."
         ),
     )
-    parser.add_argument("folder", nargs="?", help="Folder containing the clips and brief.md")
+    parser.add_argument(
+        "folder",
+        nargs="*",
+        help="Clips folder. `pick <folder>` writes a transcript and stops.",
+    )
     parser.add_argument("--club", help="Clips folder. Same as the positional argument; used by main.py.")
     parser.add_argument("--brief", help="Path to brief.md (default: <folder>/brief.md)")
     parser.add_argument("--out", help="Output directory (default: the clips folder)")
@@ -903,32 +1140,51 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-whisper",
         action="store_true",
-        help="Rank on audio peaks and motion only.",
+        help="Rank on audio peaks and motion only. Not valid with pick.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Write cuts.json and scores.json without encoding draft.mp4.",
     )
+    parser.add_argument(
+        "--transcript-only",
+        action="store_true",
+        help=(
+            "Transcribe the folder, write transcript.md and transcript.json, "
+            "and stop. No draft."
+        ),
+    )
     args = parser.parse_args(argv)
-    folder = args.club or args.folder
+    folder, transcript_only = _folder_from_args(parser, args)
     if not folder:
-        parser.error("give the clips folder, for example: python -m modules.club ./clips")
-    try:
-        cuts = run_club_montage(
-            folder,
-            brief_path=args.brief,
-            out_dir=args.out,
-            whisper_model=args.whisper_model,
-            use_whisper=not args.no_whisper,
-            dry_run=args.dry_run,
+        parser.error(
+            "give the clips folder, for example: python -m modules.club ./clips"
         )
+    try:
+        if transcript_only:
+            result = run_transcript(
+                folder,
+                out_dir=args.out,
+                whisper_model=args.whisper_model,
+            )
+        else:
+            cuts = run_club_montage(
+                folder,
+                brief_path=args.brief,
+                out_dir=args.out,
+                whisper_model=args.whisper_model,
+                use_whisper=not args.no_whisper,
+                dry_run=args.dry_run,
+            )
     except BriefError as exc:
         print(f"brief: {exc}")
         return 2
     except Exception as exc:
         print(f"club montage failed: {exc}")
         return 1
+    if transcript_only:
+        return 0 if result.get("files") else 1
     if not cuts.get("cuts"):
         return 1
     return 0

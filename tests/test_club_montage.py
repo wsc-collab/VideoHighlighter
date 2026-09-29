@@ -913,3 +913,292 @@ def test_main_py_runs_club_before_the_gui_imports():
     qt = text.index("from PySide6")
     assert club < qt
     assert "from modules.club.montage import main as _club_main" in text
+
+
+def test_brief_reads_must_include_and_include_windows():
+    brief = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\n"
+        "MUST_INCLUDE:\n"
+        "- lesson.mp4: \"hold your finish\"\n"
+        "- we play at four\n"
+        "INCLUDE_WINDOWS:\n"
+        "lesson.mp4 0:12-0:18\n"
+        "rally.mov 12.0-18.5\n"
+    )
+    assert brief.must_include == (
+        "lesson.mp4: hold your finish",
+        "we play at four",
+    )
+    assert brief.include_windows == (
+        ("lesson.mp4", 12.0, 18.0),
+        ("rally.mov", 12.0, 18.5),
+    )
+    assert brief.as_dict()["include_windows"][0]["start"] == 12.0
+    with pytest.raises(BriefError):
+        parse_brief("LENGTH: 10s\nSTYLE: talking\nINCLUDE_WINDOWS: nope\n")
+
+
+def test_quote_maps_to_word_times_and_segment_times():
+    from modules.club.pick import match_quote, pad_quote, render_transcript_md, transcript_payload
+    files = [{
+        "source": "lesson.mp4",
+        "path": "/clips/lesson.mp4",
+        "segments": [{
+            "start": 1.0,
+            "end": 2.4,
+            "text": "Hold your finish.",
+            "words": [
+                {"start": 1.0, "end": 1.3, "text": "Hold"},
+                {"start": 1.3, "end": 1.7, "text": "your"},
+                {"start": 1.7, "end": 2.4, "text": "finish."},
+            ],
+        }],
+    }, {
+        "source": "other.mp4",
+        "path": "/clips/other.mp4",
+        "segments": [{
+            "start": 5.0,
+            "end": 8.0,
+            "text": "we play at four on saturday",
+        }],
+    }]
+    hit = match_quote("hold your finish", files)
+    assert hit["source"] == "lesson.mp4"
+    assert hit["start"] == 1.0
+    assert hit["end"] == 2.4
+    only = match_quote("other.mp4: play at four", files)
+    assert only["source"] == "other.mp4"
+    assert 5.0 <= only["start"] < only["end"] <= 8.0
+    assert match_quote("not spoken", files) is None
+    start, end = pad_quote(1.0, 2.4, 30.0)
+    assert start < 1.0 and end > 2.4
+    md = render_transcript_md(transcript_payload(files, "base"))
+    assert "## lesson.mp4" in md
+    assert "0:01.000" in md
+    assert "hold" in md.casefold()
+
+
+def test_forced_windows_fill_only_the_remaining_length():
+    from modules.club.montage import select_with_forced
+    forced = Window("a.mp4", "a.mp4", 10, 14, 0, 0, 1, 0, forced=True, include="quote")
+    pool = [
+        Window("a.mp4", "a.mp4", 0, 8, 0, 0, 0, 0, score=1),
+        Window("a.mp4", "a.mp4", 10, 18, 0, 0, 0, 0, score=9),
+        Window("a.mp4", "a.mp4", 20, 28, 0, 0, 0, 0, score=5),
+    ]
+    picked = select_with_forced(pool, [forced], 20, 20)
+    assert picked[0].forced is True
+    assert picked[0].include == "quote"
+    assert all(not (w.start < 14 and w.end > 10 and not w.forced) for w in picked)
+    assert sum(w.duration for w in picked) == pytest.approx(20, abs=0.05)
+    assert select_with_forced(pool, [], 6, 10)[0].start == select_windows(pool, 6, 10)[0].start
+    over = select_with_forced(pool, [Window("a.mp4", "a.mp4", 0, 12, 0, 0, 1, 0, forced=True)], 6, 8)
+    assert len(over) == 1 and over[0].duration == 12
+
+
+def test_pick_writes_a_transcript_and_does_not_assemble(tmp_path, monkeypatch):
+    from modules.club.montage import run_transcript
+    (tmp_path / "lesson.mp4").write_bytes(b"x")
+    (tmp_path / "draft.mp4").write_bytes(b"stale")
+
+    def transcribe(path, model, log_fn):
+        assert model == "tiny"
+        return {"segments": [{
+            "start": 1.0,
+            "end": 2.4,
+            "text": "hold your finish",
+            "words": [
+                {"start": 1.0, "end": 1.3, "text": "hold"},
+                {"start": 1.3, "end": 1.7, "text": "your"},
+                {"start": 1.7, "end": 2.4, "text": "finish"},
+            ],
+        }]}
+
+    result = run_transcript(
+        tmp_path,
+        whisper_model="tiny",
+        probe=lambda _p: {"duration": 10},
+        transcribe=transcribe,
+    )
+    assert result["draft_written"] is False
+    assert (tmp_path / "draft.mp4").read_bytes() == b"stale"
+    assert not (tmp_path / "cuts.json").exists()
+    md = Path(result["transcript_md"]).read_text(encoding="utf-8")
+    body = json.loads(Path(result["transcript_json"]).read_text(encoding="utf-8"))
+    assert "hold your finish" in md
+    assert "0:01.000–0:01.300 hold" in md
+    assert body["files"][0]["segments"][0]["words"][2]["text"] == "finish"
+    assert body["whisper"] == "tiny"
+
+    seen = {}
+
+    def fake(folder, **kwargs):
+        seen["folder"] = str(folder)
+        seen.update(kwargs)
+        return {"files": [{"source": "lesson.mp4"}]}
+
+    monkeypatch.setattr("modules.club.montage.run_transcript", fake)
+    assert club_main(["pick", str(tmp_path), "--whisper-model", "tiny"]) == 0
+    assert seen["whisper_model"] == "tiny"
+    assert club_main([str(tmp_path), "--transcript-only"]) == 0
+    assert club_main(["--club", "pick", str(tmp_path)]) == 0
+    monkeypatch.setattr(
+        "modules.club.montage.run_transcript",
+        lambda *a, **k: {"files": []},
+    )
+    assert club_main(["--transcript-only", "--club", str(tmp_path)]) == 1
+
+
+def test_highlights_are_forced_and_the_ranker_fills_the_rest(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 10s\nSTYLE: talking\nTITLE: Private lesson\n"
+        "MUST_INCLUDE: \"hold your finish\"\n"
+        "INCLUDE_WINDOWS:\n"
+        "late.mp4 20-24\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "lesson.mp4").write_bytes(b"a")
+    (tmp_path / "late.mp4").write_bytes(b"b")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "base",
+        "files": [
+            {
+                "source": "lesson.mp4",
+                "duration_s": 30,
+                "segments": [{
+                    "start": 2.0,
+                    "end": 3.2,
+                    "text": "hold your finish",
+                    "words": [
+                        {"start": 2.0, "end": 2.4, "text": "hold"},
+                        {"start": 2.4, "end": 2.8, "text": "your"},
+                        {"start": 2.8, "end": 3.2, "text": "finish"},
+                    ],
+                }],
+            },
+            {"source": "late.mp4", "duration_s": 30, "segments": []},
+        ],
+    }), encoding="utf-8")
+    burned = {}
+
+    def transcribe(*_args, **_kwargs):
+        raise AssertionError("saved transcript should be reused")
+
+    def cut(src, start, end, dst, mode="cpu"):
+        Path(dst).write_bytes(f"{Path(src).name}:{start:.3f}-{end:.3f}".encode())
+
+    def combine(files, output, log_fn=print):
+        Path(output).write_bytes(b"joined")
+
+    def caption_burn(src, dst, brief, duration, cues, log_fn):
+        burned["title"] = brief.title
+        burned["cues"] = list(cues)
+        Path(dst).write_bytes(b"branded")
+
+    cuts = run_club_montage(
+        tmp_path,
+        probe=lambda _p: {"duration": 30},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0.0] * 30,
+        transcribe=transcribe,
+        cut=cut,
+        combine=combine,
+        caption_transcribe=lambda *a, **k: {"engine": "test", "segments": []},
+        caption_burn=caption_burn,
+    )
+    forced = [row for row in cuts["cuts"] if row.get("forced")]
+    assert {row["source"] for row in forced} == {"lesson.mp4", "late.mp4"}
+    late = next(row for row in forced if row["source"] == "late.mp4")
+    assert (late["start"], late["end"]) == (20, 24)
+    quote = next(row for row in forced if row["source"] == "lesson.mp4")
+    assert quote["start"] < 2.0 < 3.2 < quote["end"]
+    assert "hold your finish" in quote["include"]
+    assert cuts["assembled_seconds"] == pytest.approx(10, abs=0.2)
+    assert cuts["draft_written"] is True
+    assert burned["title"] == "Private lesson"
+    assert (tmp_path / "draft.mp4").read_bytes() == b"branded"
+    assert all(row["matched"] for row in cuts["includes"])
+
+
+def test_a_missing_quote_is_not_invented_and_a_missing_file_stops(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nMUST_INCLUDE: \"not in the audio\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "lesson.mp4").write_bytes(b"a")
+
+    def transcribe(path, model, log_fn):
+        return [{"start": 0.0, "end": 2.0, "text": "we play at four"}]
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        probe=lambda _p: {"duration": 16},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0.0] * 16,
+        transcribe=transcribe,
+    )
+    assert cuts["includes"][0]["matched"] is False
+    assert all(not row.get("forced") for row in cuts["cuts"])
+    assert cuts["draft_written"] is False
+
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nINCLUDE_WINDOWS: missing.mp4 1-3\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(BriefError, match="missing.mp4"):
+        run_club_montage(
+            tmp_path,
+            dry_run=True,
+            probe=lambda _p: {"duration": 16},
+            peaks=lambda _p: [],
+            motion=lambda _p, _d: [0.0] * 16,
+            use_whisper=False,
+        )
+
+
+def test_a_highlight_in_a_quiet_clip_is_kept(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nMUST_INCLUDE: \"hold your finish\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "lav.mp4").write_bytes(b"a")
+    (tmp_path / "phone.mp4").write_bytes(b"b")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "base",
+        "files": [
+            {"source": "lav.mp4", "duration_s": 20, "segments": []},
+            {
+                "source": "phone.mp4",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "hold your finish",
+                    "words": [
+                        {"start": 1.0, "end": 1.3, "text": "hold"},
+                        {"start": 1.3, "end": 1.6, "text": "your"},
+                        {"start": 1.6, "end": 2.0, "text": "finish"},
+                    ],
+                }],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def loudness(path):
+        return -10.0 if path.endswith("lav.mp4") else -30.0
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        dry_run=True,
+        probe=lambda _p: {"duration": 20},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0.0] * 20,
+        loudness=loudness,
+    )
+    forced = [row for row in cuts["cuts"] if row.get("forced")]
+    assert [row["source"] for row in forced] == ["phone.mp4"]
+    fillers = [row for row in cuts["cuts"] if not row.get("forced")]
+    assert fillers and {row["source"] for row in fillers} == {"lav.mp4"}
+    assert cuts["mic_preference"]["dropped"] == ["phone.mp4"]

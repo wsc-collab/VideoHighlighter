@@ -38,6 +38,11 @@ that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
 ``NOTES`` may be empty. ``NOTES`` is stored for the editor. It is not a
 prompt and it is not caption text. Without a title, subtitle, or call to
 action, a non-talking brief stays a highlights cut.
+
+``MUST_INCLUDE`` is optional. Each line is a quote or a short description
+of a moment from the transcript. ``INCLUDE_WINDOWS`` is optional too:
+``clip.mp4 12.0-18.5`` or ``clip.mp4 0:12-0:18``. Those ranges are cut
+in. When both are empty, the ranker chooses on its own.
 """
 
 from __future__ import annotations
@@ -70,7 +75,18 @@ KNOWN_FIELDS = {
     "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA", "BRAND",
     "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
     "CAPTION_POSITION", "CAPTION_FONT",
+    "MUST_INCLUDE", "INCLUDE_WINDOWS",
 }
+_CLOCK = r"\d+(?::\d{1,2}){0,2}(?:\.\d+)?"
+_WINDOW_LINE = re.compile(
+    rf"^(?P<file>.+?)\s+(?P<start>{_CLOCK})\s*(?:-|–|—|to)\s*(?P<end>{_CLOCK})\s*$",
+    re.IGNORECASE,
+)
+_QUOTED = re.compile(r'"([^"]+)"|“([^”]+)”|\'([^\']+)\'')
+_CLIP_HINT = re.compile(
+    r"^(?P<file>.+\.(?:mp4|mov|m4v|mkv|avi|webm))\s*:\s*(?P<rest>.+)$",
+    re.IGNORECASE,
+)
 CAPTION_POSITIONS = ("center", "middle", "bottom", "top")
 
 
@@ -94,6 +110,8 @@ class Brief:
     caption_size: int = 0
     caption_position: str = "center"
     caption_font: str = ""
+    must_include: tuple[str, ...] = ()
+    include_windows: tuple[tuple[str, float, float], ...] = ()
 
     def wants_brand(self) -> bool:
         """True when the brief asks for type on the cut.
@@ -121,6 +139,11 @@ class Brief:
             "caption_size": self.caption_size,
             "caption_position": self.caption_position,
             "caption_font": self.caption_font,
+            "must_include": list(self.must_include),
+            "include_windows": [
+                {"source": source, "start": start, "end": end}
+                for source, start, end in self.include_windows
+            ],
         }
 
 
@@ -261,6 +284,115 @@ def parse_caption_color(text: str) -> str:
     return colors[0] if colors else ""
 
 
+def parse_clock(token: str) -> float:
+    """Seconds from ``12``, ``12.5``, ``1:02``, or ``1:02.5``."""
+    parts = token.strip().split(":")
+    if not parts or len(parts) > 3:
+        raise BriefError(
+            f"Time {token!r} is not a clock value. Example: 1:02.5 or 12.0"
+        )
+    try:
+        nums = [float(part) for part in parts]
+    except ValueError:
+        raise BriefError(
+            f"Time {token!r} is not a clock value. Example: 1:02.5 or 12.0"
+        ) from None
+    if any(num < 0 for num in nums):
+        raise BriefError(f"Time {token!r} cannot be negative.")
+    if len(nums) == 1:
+        return nums[0]
+    if len(nums) == 2:
+        return nums[0] * 60.0 + nums[1]
+    return nums[0] * 3600.0 + nums[1] * 60.0 + nums[2]
+
+
+def _split_outside_quotes(text: str) -> list[str]:
+    """Split on newlines and semicolons that are not inside quotes."""
+    pieces: list[str] = []
+    buf: list[str] = []
+    closer = ""
+    # Apostrophes stay inside words ("don't"). Only real quotation marks wrap.
+    pairs = {"\"": "\"", "“": "”", "”": "”"}
+    for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
+        if closer:
+            buf.append(ch)
+            if ch == closer:
+                closer = ""
+            continue
+        if ch in pairs:
+            closer = pairs[ch]
+            buf.append(ch)
+            continue
+        if ch in "\n;":
+            pieces.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    pieces.append("".join(buf))
+    return pieces
+
+
+def parse_must_include(text: str) -> tuple[str, ...]:
+    """Quotes or free-text moments, one per line.
+
+    ``clip.mp4: "hold your finish"`` limits the search to that file.
+    Quotes are the words to find. A line with no quotes is the moment as
+    written. Empty means the ranker chooses.
+    """
+    moments: list[str] = []
+    seen: set[str] = set()
+    for piece in _split_outside_quotes(text):
+        line = piece.strip().lstrip("-").strip()
+        if not line:
+            continue
+        hint = _CLIP_HINT.match(line)
+        body = hint.group("rest").strip() if hint else line
+        file_name = hint.group("file").strip() if hint else ""
+        found = _QUOTED.findall(body)
+        if found:
+            texts = [next(group for group in groups if group).strip() for groups in found]
+        else:
+            texts = [body.strip().strip("\"'“”")]
+        for item in texts:
+            if not item:
+                continue
+            stored = f"{file_name}: {item}" if file_name else item
+            key = stored.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            moments.append(stored)
+    return tuple(moments)
+
+
+def parse_include_windows(text: str) -> tuple[tuple[str, float, float], ...]:
+    """``file start-end`` lines. Times are seconds or ``m:ss``.
+
+    An empty field is no forced window. A line that is not a file plus a
+    range is a brief error, caught before any clip is cut.
+    """
+    rows: list[tuple[str, float, float]] = []
+    for piece in _split_outside_quotes(text):
+        line = piece.strip().lstrip("-").strip()
+        if not line:
+            continue
+        match = _WINDOW_LINE.match(line)
+        if not match:
+            raise BriefError(
+                f"INCLUDE_WINDOWS line {line!r} needs a file and a range. "
+                "Example: lesson.mp4 0:12-0:18"
+            )
+        start = parse_clock(match.group("start"))
+        end = parse_clock(match.group("end"))
+        if end <= start:
+            raise BriefError(
+                f"INCLUDE_WINDOWS range for {match.group('file').strip()!r} "
+                "must end after it starts."
+            )
+        rows.append((match.group("file").strip(), start, end))
+    return tuple(rows)
+
+
 def parse_keywords(text: str) -> tuple[str, ...]:
     """Split on commas, semicolons, and newlines. Leading dashes are bullets."""
     parts = re.split(r"[\n,;]+", text)
@@ -343,6 +475,8 @@ def parse_brief(text: str, source: str = "") -> Brief:
         caption_size=parse_caption_size(fields.get("CAPTION_SIZE", "")),
         caption_position=parse_caption_position(fields.get("CAPTION_POSITION", "")),
         caption_font=_one_line(fields.get("CAPTION_FONT", "")),
+        must_include=parse_must_include(fields.get("MUST_INCLUDE", "")),
+        include_windows=parse_include_windows(fields.get("INCLUDE_WINDOWS", "")),
     )
 
 
