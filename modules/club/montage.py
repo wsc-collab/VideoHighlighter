@@ -78,6 +78,13 @@ STYLE_WEIGHTS = {
 MOTION_SAMPLE_FPS = 4.0
 MOTION_WIDTH = 96
 
+# A talking folder sometimes holds the mic'd take and a quieter phone
+# recording of the same moment. Mean volume this far under the loudest
+# file is left out. Files within the gap all stay. This compares level,
+# not the picture, so it is not a duplicate-frame match.
+MIC_GAP_DB = 12.0
+_MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
+
 
 @dataclass
 class Window:
@@ -119,6 +126,41 @@ class Window:
 
 def _round(value: float) -> float:
     return round(float(value), 3)
+
+
+def measure_mean_volume_db(path: str) -> float | None:
+    """Mean volume in dB from ffmpeg ``volumedetect``, or ``None`` if unread."""
+    from modules.system.app_paths import ffmpeg_exe
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe(), "-nostdin", "-v", "info", "-i", path,
+             "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = _MEAN_VOLUME.search((result.stderr or "") + (result.stdout or ""))
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def quiet_clip_names(readings, gap_db: float = MIC_GAP_DB) -> list[str]:
+    """Names at least ``gap_db`` quieter than the loudest reading.
+
+    ``readings`` is ``(name, mean_db or None)`` in folder order. ``None``
+    stays: a file that could not be metered is not treated as a bad mic.
+    The loudest file always stays, so a one-file folder is unchanged.
+    """
+    known = [db for _name, db in readings if db is not None]
+    if len(known) < 2:
+        return []
+    loudest = max(known)
+    return [
+        name for name, db in readings
+        if db is not None and loudest - db >= gap_db
+    ]
 
 
 def list_clips(folder: str | Path) -> list[Path]:
@@ -566,6 +608,7 @@ def run_club_montage(
     brand=None,
     caption_transcribe=None,
     caption_burn=None,
+    loudness=None,
 ) -> dict:
     """Score ``folder`` against its brief and write the three outputs.
 
@@ -603,6 +646,35 @@ def run_club_montage(
                 return []
 
     clips = list_clips(root)
+    loudness_fn = loudness or measure_mean_volume_db
+    dropped_quiet: list[str] = []
+    volumes: dict[str, float | None] = {}
+    if brief.style == "talking" and len(clips) > 1:
+        readings = []
+        for path in clips:
+            try:
+                db = loudness_fn(str(path))
+            except Exception as exc:
+                log_fn(f"volume skipped for {path.name}: {exc}")
+                db = None
+            volumes[path.name] = None if db is None else round(float(db), 1)
+            readings.append((path.name, db))
+        dropped_quiet = quiet_clip_names(readings)
+    dropped_set = set(dropped_quiet)
+    mic_preference = {
+        "enabled": brief.style == "talking",
+        "gap_db": MIC_GAP_DB if brief.style == "talking" else None,
+        "dropped": dropped_quiet,
+        "volumes_db": volumes,
+        "note": (
+            "Talking folders drop a clip whose mean volume is "
+            f"{MIC_GAP_DB:g} dB or more below the loudest file. "
+            "That catches a quiet phone recording next to a mic'd take. "
+            "It does not compare pictures, so two files at a similar "
+            "level both stay. Leave an obvious phone zoom out of the "
+            "folder by hand when its level is close to the mic."
+        ),
+    }
     log_fn(
         f"Club montage: {len(clips)} clip(s), "
         f"LENGTH {brief.length_min_s:g}-{brief.length_max_s:g}s, "
@@ -616,11 +688,25 @@ def run_club_montage(
         )
     elif brief.style == "talking":
         log_fn("Talking pack: title, captions of the speech, then the call to action.")
+        if dropped_quiet:
+            known = [db for db in volumes.values() if db is not None]
+            loudest = max(known) if known else None
+            for name in dropped_quiet:
+                log_fn(
+                    f"  leaving out {name}: mean volume {volumes[name]} dB is "
+                    f"{MIC_GAP_DB:g} dB or more under the loudest clip "
+                    f"({loudest} dB). Level only, not a picture match."
+                )
 
     clip_reports = []
     windows: list[Window] = []
     for path in clips:
         report = {"source": path.name, "duration_s": None, "error": None}
+        if path.name in dropped_set:
+            report["skipped"] = "quiet"
+            report["mean_volume_db"] = volumes.get(path.name)
+            clip_reports.append(report)
+            continue
         try:
             info = probe_fn(str(path))
             duration = float(info.get("duration") or 0)
@@ -690,6 +776,7 @@ def run_club_montage(
             "motion": True,
         },
         "order": "chronological" if brief.style == "talking" else "score",
+        "mic_preference": mic_preference,
         "clips": clip_reports,
         "window_count": len(windows),
         "selected_seconds": _round(assembled),
@@ -710,6 +797,7 @@ def run_club_montage(
         "within_brief": scores["within_brief"],
         "notes": brief.notes,
         "keywords": list(brief.keywords),
+        "mic_preference": mic_preference,
         "draft_written": False,
         "brand": brand_record(brief),
         "captions": caption_record(brief),

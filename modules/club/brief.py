@@ -17,8 +17,12 @@ Caption words come from the recording. They are not written in the brief.
     COLORS: #1B4D3E, #F4E8C1
     CAPTION_COLOR: #FFFFFF
     CAPTION_STROKE: #000000 3
-    CAPTION_SIZE: 42
-    CAPTION_POSITION: bottom
+
+Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
+defaults: captions in the center of the frame, about four words a line,
+and a point size that follows the frame height with a floor of 64.
+``CAPTION_POSITION: bottom`` or ``top`` still works. ``middle`` is the
+same place as ``center``.
 
 ``LENGTH`` is the finished draft's duration. A single number (``30s``) means
 that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
@@ -58,7 +62,7 @@ KNOWN_FIELDS = {
     "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
     "CAPTION_POSITION", "CAPTION_FONT",
 }
-CAPTION_POSITIONS = ("bottom", "middle", "top")
+CAPTION_POSITIONS = ("center", "middle", "bottom", "top")
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,7 @@ class Brief:
     caption_stroke: str = ""
     caption_stroke_width: int = 0
     caption_size: int = 0
-    caption_position: str = "bottom"
+    caption_position: str = "center"
     caption_font: str = ""
 
     def wants_brand(self) -> bool:
@@ -175,11 +179,13 @@ def parse_colors(text: str) -> tuple[str, ...]:
 def parse_caption_position(text: str) -> str:
     raw = text.strip().lower()
     if not raw:
-        return "bottom"
+        return "center"
     if raw not in CAPTION_POSITIONS:
         raise BriefError(
-            f"CAPTION_POSITION must be bottom, middle, or top, got {text!r}."
+            f"CAPTION_POSITION must be center, bottom, or top, got {text!r}."
         )
+    if raw == "middle":
+        return "center"
     return raw
 
 

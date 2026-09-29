@@ -327,6 +327,32 @@ def test_brand_filter_draws_type_on_the_cut_and_skips_a_plain_brief():
     assert "drawtext=" in graph
     assert r"between(t\," in graph
     assert "C\\:/Windows/Fonts/arial.ttf" in graph
+    assert "@0.78" in graph
+
+
+def test_talking_title_and_cta_sit_on_a_centered_opaque_plate():
+    from modules.club.brand import brand_filter
+    from modules.club.captions import talking_windows
+    brief = parse_brief(
+        "LENGTH: 12s\nSTYLE: talking\nTITLE: Match day\n"
+        "SUBTITLE: Woodinville\nCTA: See you Saturday\n"
+        "COLORS: #1B4D3E, #F4E8C1\n"
+    )
+    windows = talking_windows(12)
+    graph = brand_filter(
+        brief, 12, "/tmp/Club.ttf", 1920, 1080,
+        windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
+        centered=True,
+    )
+    assert "@0.78" not in graph
+    assert "0x1B4D3E@1" in graph
+    assert "(iw-iw*0.72)/2" in graph
+    assert "(ih-ih*0.28)/2" in graph
+    assert "(w-tw)/2" in graph
+    assert "(h-th)/2" in graph
+    assert "ih*0.30" not in graph
+    assert "y=h*0.05" not in graph
+    assert "drawbox=x=0:y=0:" not in graph
 
 
 def test_run_burns_type_when_the_brief_asks_and_keeps_the_cut_if_it_fails(tmp_path):
@@ -471,6 +497,11 @@ def test_caption_cues_are_spoken_words_inside_the_body():
     assert "This note is not a caption" not in blob
     assert cues[0].start >= body_start
     assert cues[-1].end <= body_end + 0.05
+    assert all(len(cue.text.split()) <= 4 for cue in cues)
+    assert [cue.text for cue in cues] == [
+        "we play at four",
+        "on saturday morning",
+    ]
     brief = parse_brief(TALKING)
     script = render_ass(cues, brief, width=1280, height=720, font_path="")
     assert "Dialogue:" in script
@@ -557,6 +588,95 @@ def test_talking_without_whisper_does_not_invent_captions(tmp_path):
     assert cuts["captions"]["cues"] == []
     assert cuts["captions"]["burned"] is True
     assert (tmp_path / "draft.mp4").read_bytes() == b"title-only"
+
+
+def test_caption_defaults_are_center_four_words_and_larger_type():
+    from modules.club.captions import CaptionCue, caption_cues, caption_style, render_ass
+    brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
+    assert brief.caption_position == "center"
+    assert brief.caption_size == 0
+    assert caption_style(brief, 720)["size"] >= 64
+    assert caption_style(brief, 1080)["size"] >= 64
+    assert caption_style(brief, 1080)["position"] == "center"
+    middle = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: middle\n")
+    assert middle.caption_position == "center"
+    words = "one two three four five six".split()
+    segments = [{
+        "start": 1.0,
+        "end": 4.0,
+        "text": "one two three four five six",
+        "words": [
+            {"start": 1.0 + i * 0.4, "end": 1.3 + i * 0.4, "word": word}
+            for i, word in enumerate(words)
+        ],
+    }]
+    cues = caption_cues(segments, body_start=0, body_end=10)
+    assert [cue.text for cue in cues] == ["one two three four", "five six"]
+    plain = [{"start": 1.0, "end": 4.0, "text": "one two three four five six"}]
+    wrapped = caption_cues(plain, body_start=0, body_end=10)
+    assert [cue.text for cue in wrapped] == ["one two three four", "five six"]
+    script = render_ass(
+        [CaptionCue(1.0, 2.0, "one two three four")],
+        brief, width=1920, height=1080, font_path="",
+    )
+    assert f"Style: Caption,DejaVu Sans,{caption_style(brief, 1080)['size']}," in script
+    assert ",5,40,40,0,1" in script
+
+
+def test_quiet_clip_names_keep_the_loudest_and_close_levels():
+    from modules.club.montage import quiet_clip_names
+    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", -22.0)]) == ["phone.mp4"]
+    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", -21.0)]) == []
+    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", None)]) == []
+    assert quiet_clip_names([("only.mp4", -40.0)]) == []
+
+
+def test_talking_drops_a_clip_much_quieter_than_the_mic(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 4s\nSTYLE: talking\nTITLE: Hi\n", encoding="utf-8",
+    )
+    (tmp_path / "lav.mp4").write_bytes(b"a")
+    (tmp_path / "phone.mp4").write_bytes(b"b")
+
+    def loudness(path):
+        return -10.0 if path.endswith("lav.mp4") else -28.0
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        dry_run=True,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [1.0],
+        motion=lambda _p, _d: [0, 1, 0, 0, 0, 0, 0, 0],
+        loudness=loudness,
+    )
+    assert {row["source"] for row in cuts["cuts"]} == {"lav.mp4"}
+    assert cuts["mic_preference"]["dropped"] == ["phone.mp4"]
+    assert cuts["mic_preference"]["enabled"] is True
+
+
+def test_hype_keeps_a_quiet_clip(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 16s\nSTYLE: hype\n", encoding="utf-8",
+    )
+    (tmp_path / "lav.mp4").write_bytes(b"a")
+    (tmp_path / "phone.mp4").write_bytes(b"b")
+
+    def loudness(_path):
+        raise AssertionError("hype does not meter clips")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        dry_run=True,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [1.0],
+        motion=lambda _p, _d: [0, 1, 0, 0, 0, 0, 0, 0],
+        loudness=loudness,
+    )
+    assert {row["source"] for row in cuts["cuts"]} == {"lav.mp4", "phone.mp4"}
+    assert cuts["mic_preference"]["dropped"] == []
+    assert cuts["mic_preference"]["enabled"] is False
 
 
 def test_main_py_runs_club_before_the_gui_imports():

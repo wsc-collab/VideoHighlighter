@@ -25,6 +25,15 @@ from modules.club.brand import brand_colors, brand_filter, resolve_font
 # Opening and closing plates. The user asked for roughly the first 2–3 seconds.
 TALKING_PLATE_S = 2.5
 
+# A caption line is about four spoken words. The character cap is only a
+# backstop for one very long token; it is not what sets the line length.
+CAPTION_WORDS = 4
+CAPTION_CHARS = 42
+
+# Omitted CAPTION_SIZE scales with the frame and stays above the old 42pt.
+CAPTION_SIZE_FLOOR = 64
+CAPTION_SIZE_FRACTION = 0.064
+
 
 @dataclass(frozen=True)
 class CaptionCue:
@@ -80,7 +89,8 @@ def _clip_pair(start: float, end: float, body_start: float, body_end: float):
     return start, end
 
 
-def _split_timed(text: str, start: float, end: float, max_chars: int):
+def _split_timed(text: str, start: float, end: float, max_chars: int,
+                 max_words: int = CAPTION_WORDS):
     """Break one spoken line into caption lines. Times follow the words."""
     words = text.split()
     if not words:
@@ -89,7 +99,7 @@ def _split_timed(text: str, start: float, end: float, max_chars: int):
     current: list[str] = []
     for word in words:
         candidate = " ".join(current + [word])
-        if current and len(candidate) > max_chars:
+        if current and (len(current) >= max_words or len(candidate) > max_chars):
             lines.append(" ".join(current))
             current = [word]
         else:
@@ -156,8 +166,8 @@ def caption_cues(
     *,
     body_start: float,
     body_end: float,
-    max_chars: int = 42,
-    max_words: int = 8,
+    max_chars: int = CAPTION_CHARS,
+    max_words: int = CAPTION_WORDS,
 ) -> list[CaptionCue]:
     """Caption lines whose text is taken only from ``segments``.
 
@@ -191,7 +201,9 @@ def caption_cues(
         clipped = _clip_pair(start, end, body_start, body_end)
         if clipped is None:
             continue
-        for line, line_start, line_end in _split_timed(text, clipped[0], clipped[1], max_chars):
+        for line, line_start, line_end in _split_timed(
+            text, clipped[0], clipped[1], max_chars, max_words,
+        ):
             cues.append(CaptionCue(line_start, line_end, line))
     return cues
 
@@ -219,7 +231,13 @@ def _ass_text(text: str) -> str:
 
 
 def _alignment(position: str) -> int:
-    return {"bottom": 2, "middle": 5, "top": 8}.get(position, 2)
+    if position in ("middle", "center"):
+        return 5
+    if position == "top":
+        return 8
+    if position == "bottom":
+        return 2
+    return 5
 
 
 def caption_style(brief: Brief, height: int) -> dict:
@@ -228,13 +246,15 @@ def caption_style(brief: Brief, height: int) -> dict:
     color = brief.caption_color or f"#{ink}"
     stroke = brief.caption_stroke or "#000000"
     width = brief.caption_stroke_width or 3
-    size = brief.caption_size or max(28, int(height * 0.046))
+    size = brief.caption_size or max(
+        CAPTION_SIZE_FLOOR, int(height * CAPTION_SIZE_FRACTION),
+    )
     return {
         "color": color,
         "stroke": stroke,
         "stroke_width": width,
         "size": size,
-        "position": brief.caption_position or "bottom",
+        "position": brief.caption_position or "center",
     }
 
 
@@ -276,7 +296,7 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
     style = caption_style(brief, height)
     face, _folder = _font_face(brief, font_path)
     align = _alignment(style["position"])
-    margin_v = 48 if style["position"] != "middle" else 0
+    margin_v = 0 if style["position"] in ("middle", "center") else 48
     header = "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -429,8 +449,8 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
     """Draw the title, the spoken captions, and the call to action.
 
     One ffmpeg pass. Captions go through an ASS script (libass). Title and
-    CTA reuse the drawtext bars. Raises when ffmpeg fails; the caller keeps
-    the unbranded cut.
+    CTA sit in the middle of the frame on a solid plate. Raises when
+    ffmpeg fails; the caller keeps the unbranded cut.
     """
     from modules.system.app_paths import ffmpeg_exe
 
@@ -456,6 +476,7 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
         plate = brand_filter(
             brief, duration, font, width, height,
             windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
+            centered=True,
         )
         if plate:
             graphs.append(plate)

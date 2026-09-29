@@ -33,10 +33,17 @@ FONT: DejaVu Sans
 COLORS: #1B4D3E, #F4E8C1
 CAPTION_COLOR: #FFFFFF
 CAPTION_STROKE: #000000 3
-CAPTION_SIZE: 42
-CAPTION_POSITION: bottom
 KEYWORDS: lesson, clinic
 NOTES: Keep the coach's answer. Do not write caption copy here.
+```
+
+Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
+in the center, about four words a line, at a size that follows the frame
+and is at least 64pt. Set them only to override:
+
+```text
+CAPTION_SIZE: 72
+CAPTION_POSITION: bottom
 ```
 
 | Field | Required | Meaning |
@@ -45,15 +52,15 @@ NOTES: Keep the coach's answer. Do not write caption copy here.
 | `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
-| `TITLE` | no | Opening title, about the first 2–3 seconds of the real cut. |
-| `SUBTITLE` | no | Optional second line on that opening card only. |
-| `COLORS` | no | Hex colors. The first is the title/CTA bar, the second is that type. |
+| `TITLE` | no | Opening title, about the first 2–3 seconds. Centered on a solid plate. |
+| `SUBTITLE` | no | Optional second line on that same centered plate. |
+| `COLORS` | no | Hex colors. The first is the solid title/CTA plate, the second is that type. |
 | `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
-| `CTA` | no | End card, about the last 2–3 seconds of the real cut. |
+| `CTA` | no | End card, about the last 2–3 seconds. Centered on a solid plate. |
 | `CAPTION_COLOR` | no | Caption fill. Default is white, or the second `COLORS` value when that is set. |
 | `CAPTION_STROKE` | no | Outline color and optional width, e.g. `#000000 3`. Default is black, 3. |
-| `CAPTION_SIZE` | no | Caption point size. Default follows the frame height. |
-| `CAPTION_POSITION` | no | `bottom` (default), `middle`, or `top`. |
+| `CAPTION_SIZE` | no | Caption point size. Default follows the frame height and is at least 64. |
+| `CAPTION_POSITION` | no | `center` (default), `bottom`, or `top`. `middle` is the same as `center`. |
 | `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
 
 `talking` favours speech and keywords, and plays clips in name order, then
@@ -72,14 +79,18 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
 `draft.mp4`:
 
 - **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
-  seconds. On a cut under about eight seconds the plate shrinks so it
-  cannot cover the captions.
+  seconds. The type is centered on both axes over a solid plate (fully
+  opaque, not a translucent wash). On a cut under about eight seconds the
+  plate shrinks so it cannot cover the captions.
 - **Captions** for speech whose middle falls between the title and the
-  call to action. The engine is local Whisper: `faster-whisper` when that
-  package is installed, otherwise `openai-whisper` from
-  `requirements.txt`. No caption is sent to a paid API. `--no-whisper`
-  leaves the captions off and does not invent lines to fill them.
-- **Call to action** from `CTA` for about the last 2.5 seconds.
+  call to action. Default position is the center of the frame, about four
+  words a line, at least 64pt (larger on a 1080 frame). The engine is
+  local Whisper: `faster-whisper` when that package is installed,
+  otherwise `openai-whisper` from `requirements.txt`. No caption is sent
+  to a paid API. `--no-whisper` leaves the captions off and does not
+  invent lines to fill them.
+- **Call to action** from `CTA` for about the last 2.5 seconds, on the
+  same kind of centered solid plate as the title.
 
 `cuts.json` lists every burned line under `captions.cues` with start, end,
 and text, so you can check the words against the recording. A failed burn
@@ -150,6 +161,21 @@ In order of preference:
 
 `hype` weights peaks and motion higher. `talking` weights speech and keywords
 higher. Neither style synthesizes media.
+
+### Quiet takes in a talking folder
+
+When `STYLE` is `talking` and the folder has more than one clip, each file's
+mean volume is read with ffmpeg `volumedetect`. A clip **12 dB or more**
+below the loudest file is left out of the cut. That is the usual gap between
+a mic'd take and a quiet phone recording of the same moment. The choice is
+written on `cuts.json` and `scores.json` under `mic_preference` (`dropped`,
+`volumes_db`).
+
+This is level only. It does not look at the picture, so it will not spot a
+phone zoom that is about as loud as the mic. Two files within 12 dB both
+stay. A folder with one clip always stays. If Lisa's phone file is a zoom
+of a mic'd take and the levels are close, leave that phone file out of the
+folder by hand before the run.
 
 ## Install
 

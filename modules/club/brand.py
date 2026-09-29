@@ -100,13 +100,17 @@ def brand_filter(
     width: int = 1920,
     height: int = 1080,
     windows: dict | None = None,
+    centered: bool = False,
 ) -> str:
     """The ffmpeg ``-vf`` graph, or ``""`` when there is nothing to draw.
 
     ``font_path`` is a filesystem path. It is escaped for drawtext here.
     ``windows`` overrides the default title / lower-third / end timing.
     A talking pack passes windows whose lower third is empty so captions
-    own the middle of the cut.
+    own the middle of the cut, and ``centered=True`` so the title and the
+    call to action sit in the middle of the frame on a solid plate.
+    The hype path leaves ``centered`` off: those plates stay full-width
+    bands with a translucent fill.
     """
     if not brief.wants_brand():
         return ""
@@ -132,9 +136,9 @@ def brand_filter(
 
     parts: list[str] = []
 
-    def box(x, y, w, h, start, end) -> None:
+    def box(x, y, w, h, start, end, opacity: str = "0.78") -> None:
         parts.append(
-            f"drawbox=x={x}:y={y}:w={w}:h={h}:color=0x{bar}@0.78:t=fill"
+            f"drawbox=x={x}:y={y}:w={w}:h={h}:color=0x{bar}@{opacity}:t=fill"
             f":{_enable(start, end)}"
         )
 
@@ -145,15 +149,38 @@ def brand_filter(
             f":line_spacing={max(4, size // 6)}:{_enable(start, end)}"
         )
 
+    # Talking title and CTA: a plate in the middle of the picture, both
+    # axes, filled solid. ``@1`` is opaque. The old ``@0.78`` read as a wash.
+    plate_x = "(iw-iw*0.72)/2"
+    plate_y = "(ih-ih*0.28)/2"
+    plate_w = "iw*0.72"
+    plate_h = "ih*0.28"
+
+    def centered_block(primary: str, primary_size: int, secondary: str,
+                       secondary_size: int, start: float, end: float) -> None:
+        box(plate_x, plate_y, plate_w, plate_h, start, end, opacity="1")
+        if primary and secondary:
+            gap = max(8, primary_size // 6)
+            block = primary_size + gap + secondary_size
+            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end)
+            words(secondary, secondary_size, "(w-tw)/2",
+                  f"(h-{block})/2+{primary_size + gap}", start, end)
+        else:
+            words(primary or secondary, primary_size or secondary_size,
+                  "(w-tw)/2", "(h-th)/2", start, end)
+
     title_on, title_off = windows["title"]
     if title_off > title_on and (title_text or sub_text):
-        box(0, 0, "iw", "ih*0.30", title_on, title_off)
-        if title_text and sub_text:
-            words(title_text, title_size, "(w-tw)/2", "h*0.05", title_on, title_off)
-            words(sub_text, sub_size, "(w-tw)/2", "h*0.16", title_on, title_off)
+        if centered:
+            centered_block(title_text, title_size, sub_text, sub_size, title_on, title_off)
         else:
-            words(title_text or sub_text, title_size or sub_size,
-                  "(w-tw)/2", "(h*0.30-th)/2", title_on, title_off)
+            box(0, 0, "iw", "ih*0.30", title_on, title_off)
+            if title_text and sub_text:
+                words(title_text, title_size, "(w-tw)/2", "h*0.05", title_on, title_off)
+                words(sub_text, sub_size, "(w-tw)/2", "h*0.16", title_on, title_off)
+            else:
+                words(title_text or sub_text, title_size or sub_size,
+                      "(w-tw)/2", "(h*0.30-th)/2", title_on, title_off)
 
     lower_on, lower_off = windows["lower"]
     if lower_off > lower_on and lower_text:
@@ -162,8 +189,11 @@ def brand_filter(
 
     end_on, end_off = windows["end"]
     if end_off > end_on and cta_text:
-        box(0, "ih*0.33", "iw", "ih*0.34", end_on, end_off)
-        words(cta_text, cta_size, "(w-tw)/2", "(h-th)/2", end_on, end_off)
+        if centered:
+            centered_block(cta_text, cta_size, "", 0, end_on, end_off)
+        else:
+            box(0, "ih*0.33", "iw", "ih*0.34", end_on, end_off)
+            words(cta_text, cta_size, "(w-tw)/2", "(h-th)/2", end_on, end_off)
 
     return ",".join(parts)
 
