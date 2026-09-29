@@ -104,6 +104,23 @@ Portable builds, GPU setup, where it writes, and fixing an oversized UI:
 | [Community models](docs/COMMUNITY-MODELS.md) | Install models other people trained, publish your own |
 | [Intel GPU](docs/INTEL-GPU.md) · [AMD GPU](docs/AMD-GPU.md) · [Apple GPU](docs/MAC-GPU.md) | Vendor-specific acceleration |
 | [Remote ollama](docs/OLLAMA-REMOTE.md) | Run the local LLM on another box on your LAN |
+| [Club montages](CLUB-MONTAGE.md) | Clips folder + `brief.md` → `draft.mp4`, `cuts.json`, `scores.json` |
+
+## Club montages
+
+This fork adds a command-line path for Woodinville Sports Club / Tier 1
+montages. Point it at a folder of real clips and a `brief.md` (`LENGTH`,
+`STYLE` `hype` or `talking`, `KEYWORDS`, `NOTES`). It ranks windows with
+local Whisper, audio peaks, and motion, then assembles `draft.mp4`.
+
+```bash
+python -m modules.club "/path/to/clips"
+python main.py --club "/path/to/clips"
+```
+
+The draft is a cut of the files in the folder. The command does not generate
+B-roll, faces, voices, or songs. Setup, the brief schema, Drive staging, and
+the desktop / localhost UI are in **[CLUB-MONTAGE.md](CLUB-MONTAGE.md)**.
 
 ## Pro edition
 

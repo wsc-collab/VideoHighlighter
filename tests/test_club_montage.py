@@ -1,0 +1,271 @@
+"""Club montage: brief.md plus a folder of real clips.
+
+The ranker and the brief parser are pure. The folder run is exercised with
+stand-ins for probe, peaks, motion, Whisper, and ffmpeg so the test does
+not encode video or download a speech model.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from modules.club.brief import BriefError, parse_brief
+from modules.club.montage import (
+    ASSEMBLE_ONLY,
+    Window,
+    keyword_hits,
+    list_clips,
+    motion_from_frames,
+    playback_order,
+    run_club_montage,
+    score_windows_for_clip,
+    select_windows,
+)
+from modules.club.montage import main as club_main
+
+
+BRIEF = """\
+# Woodinville court clips
+
+LENGTH: 6-10s
+STYLE: hype
+KEYWORDS: ace, match point
+NOTES: Prefer: the last shot of the point.
+Keep the real audio.
+"""
+
+
+def test_brief_reads_length_style_keywords_and_notes():
+    brief = parse_brief(BRIEF)
+    assert (brief.length_min_s, brief.length_max_s) == (6, 10)
+    assert brief.style == "hype"
+    assert brief.keywords == ("ace", "match point")
+    assert "Prefer: the last shot" in brief.notes
+    assert "Keep the real audio." in brief.notes
+
+
+def test_brief_accepts_heading_form_and_a_single_length():
+    text = """\
+## LENGTH
+30s
+
+## STYLE
+talking
+
+## KEYWORDS
+- rally
+- putt
+
+## NOTES
+Interview cut.
+"""
+    brief = parse_brief(text)
+    assert (brief.length_min_s, brief.length_max_s) == (30, 30)
+    assert brief.style == "talking"
+    assert brief.keywords == ("rally", "putt")
+    assert brief.notes == "Interview cut."
+
+
+def test_brief_rejects_an_unknown_style_and_a_missing_length():
+    with pytest.raises(BriefError):
+        parse_brief("LENGTH: 20-35s\nSTYLE: cinematic\n")
+    with pytest.raises(BriefError):
+        parse_brief("STYLE: hype\nKEYWORDS: ace\n")
+
+
+def test_keyword_ace_does_not_match_inside_place():
+    segments = [{"start": 0.0, "end": 2.0, "text": "back to the place"}]
+    assert keyword_hits(segments, 0, 4, ["ace"]) == []
+    segments[0]["text"] = "what an ace"
+    assert keyword_hits(segments, 0, 4, ["ace"]) == ["ace"]
+    segments[0]["text"] = "that was match point"
+    assert keyword_hits(segments, 0, 4, ["match point"]) == ["match point"]
+
+
+def test_hype_prefers_motion_and_talking_prefers_speech():
+    motion = score_windows_for_clip(
+        source="move.mp4", path="move.mp4", duration=4, style="hype",
+        keywords=(), peak_times=[], motion_series=[0, 1, 0, 0], segments=[],
+    )
+    speech = score_windows_for_clip(
+        source="talk.mp4", path="talk.mp4", duration=4, style="hype",
+        keywords=(), peak_times=[], motion_series=[0, 0, 0, 0],
+        segments=[{"start": 0.0, "end": 1.0, "text": "hello"}],
+    )
+    assert motion[0].score > speech[0].score
+
+    motion_t = score_windows_for_clip(
+        source="move.mp4", path="move.mp4", duration=4, style="talking",
+        keywords=(), peak_times=[], motion_series=[0, 1, 0, 0], segments=[],
+    )
+    speech_t = score_windows_for_clip(
+        source="talk.mp4", path="talk.mp4", duration=4, style="talking",
+        keywords=(), peak_times=[], motion_series=[0, 0, 0, 0],
+        segments=[{"start": 0.0, "end": 1.0, "text": "hello"}],
+    )
+    assert speech_t[0].score > motion_t[0].score
+
+
+def test_selection_stays_inside_the_brief_and_skips_overlaps():
+    windows = [
+        Window("a.mp4", "a.mp4", 0, 4, 0, 0, 0, 0, score=3),
+        Window("a.mp4", "a.mp4", 2, 6, 0, 0, 0, 0, score=9),
+        Window("a.mp4", "a.mp4", 4, 8, 0, 0, 0, 0, score=3),
+        Window("b.mp4", "b.mp4", 0, 4, 0, 0, 0, 0, score=2),
+    ]
+    chosen = select_windows(windows, min_s=6, max_s=10)
+    # a 4-8 overlaps the kept 2-6 window, so the second cut is the other file.
+    assert [(w.source, w.start, w.end) for w in chosen] == [
+        ("a.mp4", 2, 6),
+        ("b.mp4", 0, 4),
+    ]
+    assert all(w.end - w.start > 0 for w in chosen)
+    total = sum(w.duration for w in chosen)
+    assert 6 <= total <= 10
+    assert not (chosen[0].source == chosen[1].source and chosen[0].start < chosen[1].end and chosen[1].start < chosen[0].end)
+
+
+def test_selection_trims_only_to_reach_the_minimum():
+    windows = [Window("a.mp4", "a.mp4", 0, 8, 0, 0, 0, 0, score=5)]
+    chosen = select_windows(windows, min_s=3, max_s=3)
+    assert len(chosen) == 1
+    assert chosen[0].trimmed
+    assert chosen[0].duration == pytest.approx(3)
+
+
+def test_talking_plays_in_clip_order_and_hype_keeps_score_order():
+    strong_late = Window("b.mp4", "b.mp4", 0, 4, 0, 0, 0, 0, score=9)
+    quiet_early = Window("a.mp4", "a.mp4", 1, 5, 0, 0, 0, 0, score=1)
+    talking = playback_order([strong_late, quiet_early], "talking")
+    assert [w.source for w in talking] == ["a.mp4", "b.mp4"]
+    hype = playback_order([strong_late, quiet_early], "hype")
+    assert [w.source for w in hype] == ["b.mp4", "a.mp4"]
+
+
+def test_motion_from_frames_is_zero_until_the_picture_changes():
+    still = [b"\x10" * 4, b"\x10" * 4]
+    assert motion_from_frames(still, sample_fps=1, duration=2) == [0.0, 0.0]
+    changed = [b"\x00" * 4, b"\xff" * 4]
+    series = motion_from_frames(changed, sample_fps=1, duration=1)
+    assert series[0] == pytest.approx(1.0)
+
+
+def test_list_clips_ignores_a_previous_draft(tmp_path):
+    (tmp_path / "rally.mov").write_bytes(b"a")
+    (tmp_path / "draft.mp4").write_bytes(b"old")
+    (tmp_path / "notes.txt").write_bytes(b"x")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "other.mp4").write_bytes(b"b")
+    names = [p.name for p in list_clips(tmp_path)]
+    assert names == ["rally.mov"]
+
+
+def test_run_writes_draft_cuts_and_scores(tmp_path):
+    (tmp_path / "brief.md").write_text(BRIEF, encoding="utf-8")
+    (tmp_path / "a.mp4").write_bytes(b"a")
+    (tmp_path / "b.mp4").write_bytes(b"b")
+    (tmp_path / "draft.mp4").write_bytes(b"stale")
+    seen = []
+
+    def probe(path):
+        seen.append(Path(path).name)
+        return {"duration": 8.0, "width": 320, "height": 180}
+
+    def peaks(path):
+        return [1.0] if path.endswith("a.mp4") else [6.0]
+
+    def motion(path, duration):
+        if path.endswith("a.mp4"):
+            return [0, 1, 0, 0, 0, 0, 0, 0]
+        return [0.0] * 8
+
+    def transcribe(path, model, log_fn):
+        assert model == "base"
+        if path.endswith("a.mp4"):
+            return [{"start": 1.0, "end": 2.0, "text": "what an ace"}]
+        return [{"start": 0.0, "end": 1.0, "text": "back to the place"}]
+
+    def cut(src, start, end, dst, mode="cpu"):
+        assert mode == "cpu"
+        Path(dst).write_bytes(b"cut")
+
+    def combine(files, output, log_fn=print):
+        assert len(files) >= 1
+        Path(output).write_bytes(b"draft")
+        return output
+
+    cuts = run_club_montage(
+        tmp_path,
+        probe=probe,
+        peaks=peaks,
+        motion=motion,
+        transcribe=transcribe,
+        cut=cut,
+        combine=combine,
+    )
+    assert "draft.mp4" not in seen
+    assert cuts["policy"] == ASSEMBLE_ONLY
+    assert cuts["policy"]["generated_broll"] is False
+    assert cuts["policy"]["generated_voices"] is False
+    assert cuts["policy"]["generated_songs"] is False
+    assert cuts["draft_written"] is True
+    assert 6 <= cuts["assembled_seconds"] <= 10
+    assert cuts["within_brief"] is True
+    assert cuts["cuts"][0]["source"] == "a.mp4"
+    assert "ace" in cuts["cuts"][0]["keyword_hits"]
+    assert "Prefer: the last shot" in cuts["notes"]
+
+    on_disk = json.loads((tmp_path / "cuts.json").read_text(encoding="utf-8"))
+    scores = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
+    assert on_disk["output"] == "draft.mp4"
+    assert scores["signals"]["whisper"] == "base"
+    assert scores["signals"]["audio_peaks"] is True
+    assert scores["signals"]["motion"] is True
+    assert scores["draft_written"] is True
+    assert (tmp_path / "draft.mp4").read_bytes() == b"draft"
+    assert any(row["selected"] for row in scores["windows"])
+
+
+def test_dry_run_skips_the_encode(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 4s\nSTYLE: talking\nKEYWORDS:\nNOTES:\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "talk.mp4").write_bytes(b"t")
+
+    def probe(_path):
+        return {"duration": 8}
+
+    def cut(*_args, **_kwargs):
+        raise AssertionError("dry-run must not cut")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        dry_run=True,
+        probe=probe,
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0, 0, 1, 0, 0, 0, 0, 0],
+        cut=cut,
+        combine=cut,
+    )
+    assert cuts["draft_written"] is False
+    assert cuts["order"] == "chronological"
+    assert not (tmp_path / "draft.mp4").exists()
+    assert (tmp_path / "scores.json").is_file()
+
+
+def test_cli_missing_folder_is_a_brief_error(tmp_path):
+    missing = tmp_path / "no-such-clips"
+    assert club_main(["--club", str(missing)]) == 2
+
+
+def test_main_py_runs_club_before_the_gui_imports():
+    text = Path("main.py").read_text(encoding="utf-8")
+    club = text.index('if "--club" in sys.argv[1:]:')
+    qt = text.index("from PySide6")
+    assert club < qt
+    assert "from modules.club.montage import main as _club_main" in text

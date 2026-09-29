@@ -20,6 +20,13 @@ debug_console.install()
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
+    # Club montage is a folder-plus-brief CLI. It has to run before the Qt,
+    # OpenVINO and torch imports below: an automated run does not open a
+    # window, and loading the GUI just to cut clips is the memory problem
+    # the freeze_support block above already exists to avoid.
+    if "--club" in sys.argv[1:]:
+        from modules.club.montage import main as _club_main
+        raise SystemExit(_club_main())
 
 # Every relative path in the app — `./cache` above all — resolves against the
 # working directory, and a packaged app does not get to choose what that is.
