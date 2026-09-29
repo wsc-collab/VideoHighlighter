@@ -752,21 +752,26 @@ def test_talking_title_is_editorial_and_type_stays_white():
     assert ",1,2,0,5," in script
 
 
-def test_captions_wrap_when_a_line_is_wider_than_the_frame():
-    from modules.club.captions import CaptionCue, render_ass, wrap_caption_text
-    short = wrap_caption_text("we play at four", 1080, 16)
-    assert short == "we play at four"
+def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
+    from modules.club.captions import CaptionCue, render_ass, split_wide_cues
+    short = split_wide_cues([CaptionCue(1.0, 2.0, "we play at four")], 1080, 16)
+    assert [cue.text for cue in short] == ["we play at four"]
     long = "one two three four five six seven eight nine ten"
-    wrapped = wrap_caption_text(long, 320, 16)
-    assert "\n" in wrapped
-    assert wrapped.replace("\n", " ") == long
-    assert all(len(line) < len(long) for line in wrapped.split("\n"))
+    cues = split_wide_cues([CaptionCue(1.0, 3.0, long)], 320, 16)
+    assert len(cues) > 1
+    assert all("\n" not in cue.text for cue in cues)
+    assert " ".join(cue.text for cue in cues) == long
+    assert cues[0].start == 1.0
+    assert cues[-1].end == 3.0
+    assert all(cue.end > cue.start for cue in cues)
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\n")
     script = render_ass(
-        [CaptionCue(1.0, 2.0, long)],
+        [CaptionCue(1.0, 3.0, long)],
         brief, width=320, height=1080, font_path="",
     )
-    assert r"\N" in script
+    assert r"\N" not in script
+    assert script.count("Dialogue:") == len(cues)
+    assert "WrapStyle: 2" in script
 
 
 def test_title_uses_a_bold_file_when_one_is_installed(tmp_path):

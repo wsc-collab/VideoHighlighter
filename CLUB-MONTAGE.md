@@ -51,10 +51,10 @@ Tier 1 display face is named. Do not set Interwald, and do not switch
 Tier 1 to Oswald. An explicit `FONT`
 overrides the brand. John Wang packs are Tier 1, so the face is Inter.
 The title and the call to action are bold white, horizontally centered,
-with no stroke and no plate. Captions stay white with a black stroke,
-about 16pt (a little larger on a tall frame, still much smaller than the
-title), and wrap onto another line when the words would run past the
-frame. `TITLE` is still only the brief line.
+with no stroke and no plate. Captions stay one line: white with a black
+stroke, about 16pt (a little larger on a tall frame, still much smaller
+than the title). A phrase that would overflow becomes the next timed
+caption, not a second line on screen. `TITLE` is still only the brief line.
 
 Install Inter where the app looks for it:
 
@@ -79,9 +79,9 @@ back as a green card or a dark bar with orange type. `COLORS` still
 paints a `hype` highlights card.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
-in the center, about four words a line, at about 16pt on a 1080-tall
-frame (up to 22pt on a taller one). A line that would be wider than the
-frame wraps. A brief copied from an earlier draft that still says
+in the center, one line at a time, about four words, at about 16pt on a
+1080-tall frame (up to 22pt on a taller one). A line that would be wider
+than the frame is the next caption cue. A brief copied from an earlier draft that still says
 `CAPTION_POSITION: bottom` or `CAPTION_SIZE: 42` keeps that old look.
 Delete those two lines. Set them only to override:
 
@@ -131,8 +131,9 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   you want the real bold face; otherwise the regular face is used.
 - **Captions** for speech whose middle falls between the title and the
   call to action. Default position is the center of the frame, about four
-  words a line, about 16pt, white with a black stroke and no box. A line
-  that would run past the frame wraps. The engine is
+  words, one line on screen, about 16pt, white with a black stroke and no
+  box. A phrase that would overflow is the next timed cue, not a second
+  line. The engine is
   local Whisper: `faster-whisper` when that package is installed,
   otherwise `openai-whisper` from `requirements.txt`. No caption is sent
   to a paid API. `--no-whisper` leaves the captions off and does not
@@ -229,7 +230,8 @@ NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as t
 
 Do not copy `COLORS`, `CAPTION_POSITION: bottom`, or `CAPTION_SIZE: 42`
 from an older draft. The title is bold white with no stroke. Captions
-are smaller, white, with a black stroke, and wrap if they are too wide.
+are smaller, one line, white, with a black stroke. A wide phrase is the
+next cue.
 Add `CTA:` only when an end line is wanted.
 
 ```bash
@@ -238,8 +240,8 @@ python -m modules.club "/path/to/lisa-clips"
 
 On `draft.mp4`: the title is the who/what line, bold white, horizontally
 centered, with no stroke and no bar. Captions sit in the center, white
-with a black stroke, about 16pt, and wrap instead of running off the
-frame. Those words are the Whisper cues, not the title.
+with a black stroke, about 16pt, one line at a time. A wide phrase is
+the next cue. Those words are the Whisper cues, not the title.
 `cuts.json` lists them under `captions.cues`.
 
 If the folder also has a quiet phone zoom of a mic'd take, check

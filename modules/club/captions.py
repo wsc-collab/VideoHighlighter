@@ -5,9 +5,9 @@ cut. Nothing in the brief is turned into a caption, and no spoken line is
 copied up into ``TITLE``. The title is the brief's editorial line (who
 and what the video is). ``CTA`` is optional and covers the close when set.
 The middle is whatever was said. The title and the call to action are
-bold white with no stroke. Captions are white with a black stroke, about
-16pt, and wrap when a line is wider than the frame. Brief ``COLORS`` do
-not tint them.
+bold white with no stroke. Captions are one line, white with a black
+stroke, about 16pt. A phrase that would overflow becomes the next timed
+cue. Brief ``COLORS`` do not tint them.
 
 Local Whisper only. ``faster-whisper`` is used when it is installed;
 otherwise the ``openai-whisper`` package already required by the app.
@@ -29,8 +29,8 @@ from modules.club.brand import brand_filter, neutral_ink, resolve_font, type_fon
 # Opening and closing plates. The user asked for roughly the first 2–3 seconds.
 TALKING_PLATE_S = 2.5
 
-# A caption line is a short phrase. A line that would run past the frame
-# wraps instead. The character cap is only a backstop.
+# A caption is one line. A phrase that would run past the frame becomes
+# the next timed cue. The character cap is only a backstop.
 CAPTION_WORDS = 4
 CAPTION_CHARS = 42
 
@@ -255,29 +255,64 @@ def default_caption_size(height: int) -> int:
     return max(CAPTION_SIZE_AT_1080, min(CAPTION_SIZE_CAP, scaled))
 
 
-def wrap_caption_text(text: str, frame_width: int, font_size: int) -> str:
-    """Soft-wrap ``text`` so a line fits ``frame_width``.
-
-    Words stay in order. A short phrase that already fits is one line.
-    """
-    words = str(text or "").split()
-    if not words:
-        return ""
+def _line_capacity(frame_width: int, font_size: int) -> tuple[int, float]:
+    """``(max characters, pixels per character)`` for one caption line."""
     usable = max(40, int(max(frame_width, 1) * 0.82))
     char_px = max(1.0, float(font_size) * 0.55)
-    max_chars = max(8, int(usable / char_px))
+    return max(8, int(usable / char_px)), char_px
+
+
+def one_line_pieces(text: str, frame_width: int, font_size: int) -> list[str]:
+    """Split ``text`` into lines that each fit the frame. No line holds a break."""
+    words = str(text or "").split()
+    if not words:
+        return []
+    max_chars, char_px = _line_capacity(frame_width, font_size)
+    usable = max_chars * char_px
     lines: list[str] = []
     current: list[str] = []
     for word in words:
         candidate = " ".join(current + [word])
-        if current and (len(candidate) > max_chars or len(candidate) * char_px > usable):
+        too_wide = current and (
+            len(candidate) > max_chars or len(candidate) * char_px > usable
+        )
+        if too_wide:
             lines.append(" ".join(current))
             current = [word]
         else:
             current.append(word)
     if current:
         lines.append(" ".join(current))
-    return "\n".join(lines)
+    return lines
+
+
+def split_wide_cues(cues, frame_width: int, font_size: int) -> list[CaptionCue]:
+    """One cue per on-screen line.
+
+    A cue that would wrap is replaced by later cues that share its time
+    span. Words stay in order. Nothing is added that was not in the cue.
+    """
+    shown: list[CaptionCue] = []
+    for cue in cues or []:
+        pieces = one_line_pieces(getattr(cue, "text", ""), frame_width, font_size)
+        if not pieces:
+            continue
+        if len(pieces) == 1:
+            shown.append(CaptionCue(cue.start, cue.end, pieces[0]))
+            continue
+        total = sum(len(piece) for piece in pieces) or 1
+        span = max(0.0, float(cue.end) - float(cue.start))
+        cursor = float(cue.start)
+        for index, piece in enumerate(pieces):
+            if index == len(pieces) - 1:
+                end = float(cue.end)
+            else:
+                end = cursor + span * (len(piece) / total)
+            if end <= cursor:
+                end = cursor + 0.15
+            shown.append(CaptionCue(cursor, end, piece))
+            cursor = end
+    return shown
 
 
 def caption_style(brief: Brief, height: int) -> dict:
@@ -351,7 +386,7 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
         "ScriptType: v4.00+",
         f"PlayResX: {int(width)}",
         f"PlayResY: {int(height)}",
-        "WrapStyle: 0",
+        "WrapStyle: 2",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -372,12 +407,11 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
          "Effect, Text"),
     ])
     lines = [header]
-    for cue in cues:
-        wrapped = wrap_caption_text(cue.text, int(width), int(style["size"]))
+    for cue in split_wide_cues(cues, int(width), int(style["size"])):
         lines.append(
             "Dialogue: 0,"
             f"{ass_timestamp(cue.start)},{ass_timestamp(cue.end)},"
-            f"Caption,,0,0,0,,{_ass_text(wrapped)}"
+            f"Caption,,0,0,0,,{_ass_text(cue.text)}"
         )
     return "\n".join(lines) + "\n"
 
@@ -534,6 +568,10 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
 
     ass_path = ""
     if cues:
+        # Replace the caller's list so cuts.json matches the one-line cues.
+        cues[:] = split_wide_cues(
+            list(cues), width, caption_style(brief, height)["size"],
+        )
         if not font:
             raise RuntimeError(
                 "No font for captions. Set FONT or CAPTION_FONT to a .ttf path or a font name."
