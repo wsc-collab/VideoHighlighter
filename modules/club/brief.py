@@ -14,8 +14,9 @@ is (``Private lesson with Coach John Wang``). It is not a line from the
 transcript. Caption words come from the recording. They are not written
 in the brief, and they are not copied up into the title.
 
+    BRAND: tier1
     TITLE: Private lesson with Coach John Wang
-    FONT: DejaVu Sans
+    FONT: Interwald
     KEYWORDS: lesson, finish
     NOTES: Prefer windows where the coach is speaking.
 
@@ -64,7 +65,7 @@ REQUIRED = ("LENGTH", "STYLE")
 # point") would otherwise be read as a new key.
 KNOWN_FIELDS = {
     "LENGTH", "STYLE", "KEYWORDS", "NOTES",
-    "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA",
+    "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA", "BRAND",
     "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
     "CAPTION_POSITION", "CAPTION_FONT",
 }
@@ -83,6 +84,7 @@ class Brief:
     subtitle: str = ""
     colors: tuple[str, ...] = ()
     font: str = ""
+    brand: str = ""
     cta: str = ""
     caption_color: str = ""
     caption_stroke: str = ""
@@ -109,6 +111,7 @@ class Brief:
             "subtitle": self.subtitle,
             "colors": list(self.colors),
             "font": self.font,
+            "brand": self.brand,
             "cta": self.cta,
             "caption_color": self.caption_color,
             "caption_stroke": self.caption_stroke,
@@ -153,6 +156,20 @@ def parse_style(text: str) -> str:
 def _one_line(text: str) -> str:
     """Join wrapped brief lines into the single string that gets drawn."""
     return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
+def parse_brand(text: str) -> str:
+    """``tier1``, ``wsc``, or ``bsc``. Empty means no brand default."""
+    raw = " ".join(text.strip().lower().replace("_", " ").replace("-", " ").split())
+    if not raw:
+        return ""
+    if raw in {"tier1", "tier 1"}:
+        return "tier1"
+    if raw in {"wsc", "bsc"}:
+        return raw
+    raise BriefError(
+        f"BRAND must be tier1, wsc, or bsc, got {text!r}."
+    )
 
 
 def parse_colors(text: str) -> tuple[str, ...]:
@@ -316,6 +333,7 @@ def parse_brief(text: str, source: str = "") -> Brief:
         subtitle=_one_line(fields.get("SUBTITLE", "")),
         colors=parse_colors(fields.get("COLORS", "")),
         font=_one_line(fields.get("FONT", "")),
+        brand=parse_brand(fields.get("BRAND", "")),
         cta=_one_line(fields.get("CTA", "")),
         caption_color=parse_caption_color(fields.get("CAPTION_COLOR", "")),
         caption_stroke=stroke_color,

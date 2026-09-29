@@ -262,23 +262,108 @@ def _fallback_font() -> str:
     return _font_path()
 
 
-def resolve_font(spec: str, log_fn=print) -> str:
+# Drop the file in either place. The Mac user font folder is the usual
+# install. ``fonts/`` next to this repo is the copy the club clone can carry.
+INTERWALD_INSTALL = "~/Library/Fonts/Interwald.otf"
+CLUB_FONTS_DIR = "fonts"
+
+_FONT_FILES = {
+    "interwald": (
+        "Interwald.otf",
+        "Interwald.ttf",
+        "Interwald-Regular.otf",
+        "Interwald-Regular.ttf",
+    ),
+    "inter": (
+        "Inter-Regular.otf",
+        "Inter-Regular.ttf",
+        "Inter.otf",
+        "Inter.ttf",
+    ),
+}
+
+
+def font_for_brand(brand: str) -> str:
+    """Default face when ``FONT`` is left blank.
+
+    Tier 1 (golf and tennis) uses Interwald. WSC and BSC use Inter.
+    """
+    if brand == "tier1":
+        return "Interwald"
+    if brand in {"wsc", "bsc"}:
+        return "Inter"
+    return ""
+
+
+def type_font(brief: Brief) -> str:
+    """Face for the title, the captions, and the call to action.
+
+    ``CAPTION_FONT`` wins, then ``FONT``, then the brand default.
+    """
+    return (brief.caption_font or brief.font or font_for_brand(brief.brand)).strip()
+
+
+def club_font_dirs() -> list[Path]:
+    """Folders checked for Interwald and Inter before fontconfig."""
+    home = Path.home()
+    repo = Path(__file__).resolve().parents[2]
+    windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    return [
+        repo / CLUB_FONTS_DIR,
+        home / "Library" / "Fonts",
+        Path("/Library/Fonts"),
+        home / ".local" / "share" / "fonts",
+        home / "Desktop" / "Marketing" / "Grok Bot Work" / "VideoHighlighter" / CLUB_FONTS_DIR,
+        windir / "Fonts",
+    ]
+
+
+def _file_for_name(name: str, directories) -> str:
+    filenames = _FONT_FILES.get(name.casefold(), ())
+    if not filenames:
+        return ""
+    for folder in directories:
+        for filename in filenames:
+            candidate = Path(folder) / filename
+            if candidate.is_file():
+                return str(candidate.resolve())
+    return ""
+
+
+def _lookup_font(spec: str, directories) -> str:
+    candidate = Path(spec).expanduser()
+    if candidate.is_file():
+        return str(candidate.resolve())
+    found = _file_for_name(spec, directories)
+    if found:
+        return found
+    return _fontconfig(spec)
+
+
+def resolve_font(spec: str, log_fn=print, search_dirs=None) -> str:
     """A ``.ttf``/``.otf``/``.ttc`` path for ``FONT``.
 
     A path that exists is used as given. Otherwise the string is a font
-    name (``Arial``, ``DejaVu Sans``). When that cannot be found, a bold
-    sans already on the machine is used, and the substitution is logged.
+    name. Interwald is looked up under ``~/Library/Fonts`` and ``fonts/``
+    in the clone, then by family name. If that file is missing, Inter is
+    used, then a bold sans already on the machine. The substitution is logged.
     """
     spec = (spec or "").strip().strip("\"'")
+    directories = list(search_dirs) if search_dirs is not None else club_font_dirs()
     if spec:
-        candidate = Path(spec).expanduser()
-        if candidate.is_file():
-            return str(candidate.resolve())
-        found = _fontconfig(spec)
+        found = _lookup_font(spec, directories)
         if found:
             return found
-        if spec:
-            log_fn(f"FONT {spec!r} was not found; using a system sans.")
+        if spec.casefold() == "interwald":
+            log_fn(
+                "FONT 'Interwald' was not found. Install it at "
+                f"{INTERWALD_INSTALL} or as {CLUB_FONTS_DIR}/Interwald.otf "
+                "next to the app. Using Inter."
+            )
+            found = _lookup_font("Inter", directories)
+            if found:
+                return found
+        log_fn(f"FONT {spec!r} was not found; using a system sans.")
     return _fallback_font()
 
 
@@ -291,7 +376,7 @@ def apply_brand(src: str, dst: str, brief: Brief, duration: float, log_fn=print)
     """
     from modules.system.app_paths import ffmpeg_exe
 
-    font = resolve_font(brief.font, log_fn=log_fn)
+    font = resolve_font(type_font(brief), log_fn=log_fn)
     if not font:
         raise RuntimeError(
             "No font for on-screen type. Set FONT to a .ttf path or a font name."

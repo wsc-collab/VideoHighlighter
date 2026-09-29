@@ -21,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 
 from modules.club.brief import Brief
-from modules.club.brand import brand_filter, neutral_ink, resolve_font
+from modules.club.brand import brand_filter, neutral_ink, resolve_font, type_font
 
 
 # Opening and closing plates. The user asked for roughly the first 2–3 seconds.
@@ -471,7 +471,7 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
     windows = talking_windows(duration)
     font = ""
     if brief.wants_brand() or cues:
-        font = resolve_font(brief.caption_font or brief.font, log_fn=log_fn)
+        font = resolve_font(type_font(brief), log_fn=log_fn)
     width, height = 1920, 1080
     try:
         from modules.media.video_probe import probe_video

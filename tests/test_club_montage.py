@@ -443,6 +443,41 @@ def test_resolve_font_prefers_an_existing_file(tmp_path):
     assert resolve_font(str(font)) == str(font.resolve())
 
 
+def test_brand_picks_interwald_or_inter_and_interwald_can_fall_back(tmp_path):
+    from modules.club.brand import font_for_brand, resolve_font, type_font
+    tier1 = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\nBRAND: tier1\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+    )
+    assert tier1.brand == "tier1"
+    assert tier1.font == ""
+    assert font_for_brand(tier1.brand) == "Interwald"
+    assert type_font(tier1) == "Interwald"
+    wsc = parse_brief("LENGTH: 20s\nSTYLE: talking\nBRAND: wsc\nTITLE: Clinic\n")
+    bsc = parse_brief("LENGTH: 20s\nSTYLE: talking\nBRAND: BSC\nTITLE: Clinic\n")
+    assert type_font(wsc) == "Inter"
+    assert type_font(bsc) == "Inter"
+    explicit = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\nBRAND: tier1\nFONT: /tmp/Club.ttf\nTITLE: Hi\n"
+    )
+    assert type_font(explicit) == "/tmp/Club.ttf"
+    with pytest.raises(BriefError):
+        parse_brief("LENGTH: 10s\nSTYLE: talking\nBRAND: nike\n")
+
+    interwald = tmp_path / "Interwald.otf"
+    interwald.write_bytes(b"iw")
+    assert resolve_font("Interwald", search_dirs=[tmp_path]) == str(interwald.resolve())
+
+    other = tmp_path / "only-inter"
+    other.mkdir()
+    inter = other / "Inter-Regular.ttf"
+    inter.write_bytes(b"in")
+    notes = []
+    chosen = resolve_font("Interwald", log_fn=notes.append, search_dirs=[other])
+    assert chosen == str(inter.resolve())
+    assert any("Interwald" in line and "Inter" in line for line in notes)
+
+
 TALKING = """\
 LENGTH: 6-10s
 STYLE: talking

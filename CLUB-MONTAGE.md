@@ -27,8 +27,9 @@ type fields are optional: leave them out and the run stays a highlights cut.
 ```text
 LENGTH: 20s
 STYLE: talking
+BRAND: tier1
 TITLE: Private lesson with Coach John Wang
-FONT: DejaVu Sans
+FONT: Interwald
 KEYWORDS: lesson, finish
 NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.
 ```
@@ -42,6 +43,29 @@ Leave `CTA` out when there is no end card. A soft line is optional:
 
 ```text
 CTA: Book a lesson
+```
+
+`BRAND` picks the face when `FONT` is omitted. `tier1` (golf and tennis
+Tier 1) uses **Interwald**. `wsc` and `bsc` use **Inter**. An explicit
+`FONT` overrides that. John Wang packs are Tier 1, so the face is
+Interwald. Title, captions, and CTA still sit on the picture in white
+with a black stroke. `TITLE` is still only the brief line.
+
+Install Interwald where the app looks for it:
+
+- Mac: `~/Library/Fonts/Interwald.otf` (`.ttf` is fine)
+- This clone: `fonts/Interwald.otf` (on the club Mac,
+  `~/Desktop/Marketing/Grok Bot Work/VideoHighlighter/fonts/Interwald.otf`)
+- Windows: `C:\Windows\Fonts\Interwald.otf`
+
+Inter uses the same folders (`Inter-Regular.otf` or `Inter-Regular.ttf`).
+If Interwald is missing, the run logs that and uses Inter. If Inter is
+missing too, it uses a bold sans already on the machine (DejaVu Sans Bold
+or Arial). A WSC or BSC brief:
+
+```text
+BRAND: wsc
+FONT: Inter
 ```
 
 Leave `COLORS` out. On a talking pack the title, captions, and call to
@@ -71,7 +95,8 @@ CAPTION_POSITION: bottom
 | `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Centered white type on the picture, black stroke, no plate. Not a line from the transcript. |
 | `SUBTITLE` | no | Optional second line with the title. Same white type, no plate. |
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
-| `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
+| `BRAND` | no | `tier1` (golf and tennis Tier 1), `wsc`, or `bsc`. Picks the default face when `FONT` is omitted. |
+| `FONT` | no | A `.ttf` / `.otf` path, or a font name. Default is Interwald for `tier1` and Inter for `wsc` and `bsc`. |
 | `CTA` | no | Optional close, about the last 2–3 seconds. Same white type on the picture. Leave it out for no end line. |
 | `CAPTION_COLOR` | no | Drawn as white or black. Default is white. A cream or orange value is drawn as white. |
 | `CAPTION_STROKE` | no | Outline. Default is black behind white type, or white behind black type. Width example: `#000000 3`. |
@@ -190,8 +215,9 @@ one folder with this `brief.md`. Do not copy `CAPTION_SIZE` or
 ```text
 LENGTH: 30s
 STYLE: talking
+BRAND: tier1
 TITLE: Private lesson with Coach John Wang
-FONT: DejaVu Sans
+FONT: Interwald
 KEYWORDS: lesson, clinic
 NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.
 ```
