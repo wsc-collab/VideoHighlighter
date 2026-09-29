@@ -112,6 +112,8 @@ This fork adds a command-line path for Woodinville Sports Club / Tier 1
 montages. Point it at a folder of real clips and a `brief.md` (`LENGTH`,
 `STYLE` `hype` or `talking`, `KEYWORDS`, `NOTES`). It ranks windows with
 local Whisper, audio peaks, and motion, then assembles `draft.mp4`.
+Optional `TITLE`, `SUBTITLE`, `COLORS`, `FONT`, and `CTA` are drawn on
+that cut. A brief without them stays highlights only.
 
 ```bash
 python -m modules.club "/path/to/clips"

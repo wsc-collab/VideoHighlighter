@@ -4,19 +4,27 @@ This fork builds review drafts for Woodinville Sports Club and Tier 1 club
 montages (tennis, golf, APL). A folder of **real clips** plus a `brief.md`
 becomes a ranked cut list and one assembled file.
 
-The club path only cuts windows out of those clips and joins the windows.
-It does not generate B-roll, faces, voices, or songs. If a moment is missing,
-the fix is another real clip or a different in/out in `cuts.json`.
+The club path cuts windows out of those clips and joins the windows. When
+the brief includes a title, subtitle, or call to action, that type is drawn
+on the joined cut. It does not generate B-roll, faces, voices, or songs. If
+a moment is missing, the fix is another real clip or a different in/out in
+`cuts.json`.
 
 The desktop highlighter is unchanged. Automated runs use the CLI below.
 
 ## brief.md
 
-Put `brief.md` in the clips folder. Four fields:
+Put `brief.md` in the clips folder. Length and style are required. The
+type fields are optional: leave them out and the run stays a highlights cut.
 
 ```text
 LENGTH: 20-35s
 STYLE: hype
+TITLE: Match day
+SUBTITLE: Woodinville Tennis
+COLORS: #1B4D3E, #F4E8C1
+FONT: DejaVu Sans
+CTA: See you Saturday
 KEYWORDS: ace, rally, birdie
 NOTES: Prefer the last shot of the point. Keep the original audio.
 ```
@@ -27,6 +35,11 @@ NOTES: Prefer the last shot of the point. Keep the original audio.
 | `STYLE` | yes | `hype` or `talking`. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them. Commas or bullets. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt. |
+| `TITLE` | no | Opening title, drawn on the first seconds of the real cut. |
+| `SUBTITLE` | no | Second line on the title card, and the lower third. |
+| `COLORS` | no | Hex colors. The first is the bar, the second is the type. |
+| `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
+| `CTA` | no | End-card line, drawn on the closing seconds of the real cut. |
 
 `hype` favours audio peaks and motion, and plays the strongest windows first.
 `talking` favours speech and keywords, and plays clips in name order, then
@@ -36,6 +49,30 @@ Heading form works too (`## LENGTH` on its own line, value underneath).
 A colon inside `NOTES` stays part of the note.
 
 Keywords are supplied per brief. The app has no built-in sport category list.
+
+## On-screen type
+
+`TITLE`, `SUBTITLE`, and `CTA` are burned onto `draft.mp4` after the clips
+are joined. The pass does not add frames and does not replace the picture.
+A bar in the brief's first color sits behind the words; the second color is
+the type. One color keeps that bar and chooses black or white type for
+contrast. With no `COLORS`, the bar is near-black and the type is white.
+
+Timing on a cut long enough for three bands (about two and a half seconds
+and up):
+
+- Title card: `TITLE` and `SUBTITLE` over the opening.
+- Lower third: `SUBTITLE`, or `TITLE` when there is no subtitle, through the middle.
+- End card: `CTA` over the close.
+
+Shorter cuts drop the lower third so the title and the call to action do
+not stack. `FONT` is a file path when that file exists, otherwise a font
+name (`Arial`, `DejaVu Sans`, `Helvetica`). If the font cannot be found, a
+bold sans already on the machine is used. If drawing fails, `draft.mp4`
+stays the unbranded cut and `cuts.json` records `brand.error`.
+
+`brand.requested` is false when the brief has no title, subtitle, or call
+to action. Colors or a font alone do not start the pass.
 
 ## Run
 

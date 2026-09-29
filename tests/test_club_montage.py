@@ -45,6 +45,8 @@ def test_brief_reads_length_style_keywords_and_notes():
     assert brief.keywords == ("ace", "match point")
     assert "Prefer: the last shot" in brief.notes
     assert "Keep the real audio." in brief.notes
+    assert brief.wants_brand() is False
+    assert brief.title == "" and brief.cta == ""
 
 
 def test_brief_accepts_heading_form_and_a_single_length():
@@ -156,6 +158,7 @@ def test_motion_from_frames_is_zero_until_the_picture_changes():
 def test_list_clips_ignores_a_previous_draft(tmp_path):
     (tmp_path / "rally.mov").write_bytes(b"a")
     (tmp_path / "draft.mp4").write_bytes(b"old")
+    (tmp_path / "vh_brand_leftover.mp4").write_bytes(b"tmp")
     (tmp_path / "notes.txt").write_bytes(b"x")
     (tmp_path / "nested").mkdir()
     (tmp_path / "nested" / "other.mp4").write_bytes(b"b")
@@ -211,6 +214,8 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
     assert cuts["policy"]["generated_broll"] is False
     assert cuts["policy"]["generated_voices"] is False
     assert cuts["policy"]["generated_songs"] is False
+    assert cuts["brand"]["requested"] is False
+    assert cuts["brand"]["applied"] is False
     assert cuts["draft_written"] is True
     assert 6 <= cuts["assembled_seconds"] <= 10
     assert cuts["within_brief"] is True
@@ -261,6 +266,146 @@ def test_dry_run_skips_the_encode(tmp_path):
 def test_cli_missing_folder_is_a_brief_error(tmp_path):
     missing = tmp_path / "no-such-clips"
     assert club_main(["--club", str(missing)]) == 2
+
+
+BRANDED = """\
+LENGTH: 6-10s
+STYLE: hype
+TITLE: Match day
+SUBTITLE: Woodinville
+COLORS: #1B4D3E, #F4E8C1
+FONT: /tmp/Club.ttf
+CTA: See you Saturday
+KEYWORDS:
+NOTES: Keep the picture.
+"""
+
+
+def test_brief_reads_optional_type_and_rejects_a_bad_color():
+    brief = parse_brief(BRANDED)
+    assert brief.wants_brand() is True
+    assert brief.title == "Match day"
+    assert brief.subtitle == "Woodinville"
+    assert brief.colors == ("#1B4D3E", "#F4E8C1")
+    assert brief.font == "/tmp/Club.ttf"
+    assert brief.cta == "See you Saturday"
+    short = parse_brief("LENGTH: 10s\nSTYLE: talking\nCOLORS: #fff\nTITLE: Hi\n")
+    assert short.colors == ("#FFFFFF",)
+    with pytest.raises(BriefError):
+        parse_brief("LENGTH: 10s\nSTYLE: hype\nCOLORS: green\n")
+
+
+def test_brand_colors_and_plate_windows():
+    from modules.club.brand import brand_colors, plate_windows
+    assert brand_colors(()) == ("111111", "FFFFFF")
+    assert brand_colors(("#1B4D3E", "#F4E8C1")) == ("1B4D3E", "F4E8C1")
+    assert brand_colors(("#FFFFFF",))[1] == "111111"
+    assert brand_colors(("#000000",))[1] == "FFFFFF"
+    long = plate_windows(20)
+    assert long["title"] == pytest.approx((0.0, 3.0))
+    assert long["lower"][0] == pytest.approx(3.0)
+    assert long["end"][1] == pytest.approx(20.0)
+    short = plate_windows(2)
+    assert short["lower"] == (0.0, 0.0)
+    assert short["title"][1] == pytest.approx(short["end"][0])
+
+
+def test_brand_filter_draws_type_on_the_cut_and_skips_a_plain_brief():
+    from modules.club.brand import brand_filter
+    plain = parse_brief(BRIEF)
+    assert brand_filter(plain, 20, "/tmp/Club.ttf") == ""
+    brief = parse_brief(BRANDED.replace("Match day", "Club: Night"))
+    graph = brand_filter(brief, 20, r"C:\Windows\Fonts\arial.ttf", 1920, 1080)
+    assert "Club\\: Night" in graph
+    assert "Woodinville" in graph
+    assert "See you Saturday" in graph
+    assert "0x1B4D3E" in graph
+    assert "0xF4E8C1" in graph
+    assert "drawbox=" in graph
+    assert "drawtext=" in graph
+    assert r"between(t\," in graph
+    assert "C\\:/Windows/Fonts/arial.ttf" in graph
+
+
+def test_run_burns_type_when_the_brief_asks_and_keeps_the_cut_if_it_fails(tmp_path):
+    (tmp_path / "brief.md").write_text(BRANDED, encoding="utf-8")
+    (tmp_path / "a.mp4").write_bytes(b"a")
+    calls = []
+
+    def combine(files, output, log_fn=print):
+        Path(output).write_bytes(b"draft")
+        return output
+
+    def brand(src, dst, brief, duration, log_fn=print):
+        calls.append((Path(src).name, brief.title, duration))
+        Path(dst).write_bytes(b"branded")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [1.0],
+        motion=lambda _p, _d: [0, 1, 0, 0, 0, 0, 0, 0],
+        transcribe=lambda *_a, **_k: [],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=combine,
+        brand=brand,
+    )
+    assert calls and calls[0][1] == "Match day"
+    assert cuts["brand"]["applied"] is True
+    assert cuts["brand"]["error"] is None
+    assert cuts["policy"]["generated_broll"] is False
+    assert (tmp_path / "draft.mp4").read_bytes() == b"branded"
+
+    def fail(*_a, **_k):
+        raise RuntimeError("drawtext missing")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [1.0],
+        motion=lambda _p, _d: [0, 1, 0, 0, 0, 0, 0, 0],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=combine,
+        brand=fail,
+    )
+    assert cuts["draft_written"] is True
+    assert cuts["brand"]["requested"] is True
+    assert cuts["brand"]["applied"] is False
+    assert "drawtext missing" in cuts["brand"]["error"]
+    assert (tmp_path / "draft.mp4").read_bytes() == b"draft"
+    assert list(tmp_path.glob("vh_brand_*.mp4")) == []
+
+
+def test_dry_run_does_not_draw_type(tmp_path):
+    (tmp_path / "brief.md").write_text(BRANDED, encoding="utf-8")
+    (tmp_path / "a.mp4").write_bytes(b"a")
+
+    def brand(*_a, **_k):
+        raise AssertionError("dry-run must not draw type")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        dry_run=True,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [1, 0, 0, 0, 0, 0, 0, 0],
+        cut=brand,
+        combine=brand,
+        brand=brand,
+    )
+    assert cuts["brand"]["requested"] is True
+    assert cuts["brand"]["applied"] is False
+    assert not (tmp_path / "draft.mp4").exists()
+
+
+def test_resolve_font_prefers_an_existing_file(tmp_path):
+    from modules.club.brand import resolve_font
+    font = tmp_path / "Club.ttf"
+    font.write_bytes(b"font")
+    assert resolve_font(str(font)) == str(font.resolve())
 
 
 def test_main_py_runs_club_before_the_gui_imports():

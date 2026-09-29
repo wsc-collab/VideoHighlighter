@@ -11,8 +11,10 @@ Both styles only cut ranges that already exist in the supplied files and
 concatenate those ranges. Weights change which windows are kept. They do
 not create pictures, faces, voices, or songs.
 
-``NOTES`` is copied into the JSON for the person reviewing the draft. It is
-not a prompt.
+When the brief sets ``TITLE``, ``SUBTITLE``, or ``CTA``, a second ffmpeg
+pass draws that type on the assembled cut (colors and font included). A
+brief without those fields stays a highlights cut. ``NOTES`` is copied into
+the JSON for the person reviewing the draft. It is not a prompt.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from modules.club.brief import Brief, BriefError, load_brief
+from modules.club.brand import apply_brand, brand_record
 
 
 # Stated on every run so a later reader can see what the files are.
@@ -43,7 +46,8 @@ ASSEMBLE_ONLY = {
     "generated_songs": False,
     "note": (
         "Windows are cut from the supplied clips and concatenated. "
-        "Nothing is synthesized."
+        "On-screen type, when the brief asks for it, is drawn on that cut. "
+        "Nothing is synthesized: no B-roll, faces, voices, or songs."
     ),
 }
 
@@ -119,7 +123,7 @@ def list_clips(folder: str | Path) -> list[Path]:
     for path in sorted(root.iterdir(), key=lambda p: p.name.casefold()):
         if not path.is_file():
             continue
-        if path.name.lower() in OUTPUT_NAMES:
+        if path.name.lower() in OUTPUT_NAMES or path.name.startswith("vh_brand_"):
             continue
         if path.suffix.lower() in VIDEO_SUFFIXES:
             clips.append(path)
@@ -482,6 +486,7 @@ def run_club_montage(
     transcribe=None,
     cut=None,
     combine=None,
+    brand=None,
 ) -> dict:
     """Score ``folder`` against its brief and write the three outputs.
 
@@ -502,6 +507,7 @@ def run_club_montage(
     transcribe_fn = transcribe or default_transcribe
     cut_fn = cut or default_cut
     combine_fn = combine or default_combine
+    brand_fn = brand or apply_brand
 
     whisper_status = "skipped" if not use_whisper else whisper_model
     transcribe_live = transcribe_fn
@@ -601,6 +607,7 @@ def run_club_montage(
         "selected_seconds": _round(assembled),
         "within_brief": bool(within and ordered),
         "draft_written": False,
+        "brand": brand_record(brief),
         "windows": rows,
     }
     cuts = {
@@ -615,6 +622,7 @@ def run_club_montage(
         "notes": brief.notes,
         "keywords": list(brief.keywords),
         "draft_written": False,
+        "brand": brand_record(brief),
         "cuts": [
             w.as_dict(selected=True, play_index=i)
             for i, w in enumerate(ordered)
@@ -657,6 +665,29 @@ def run_club_montage(
 
     cuts["draft_written"] = True
     scores["draft_written"] = True
+    if brief.wants_brand():
+        branded = None
+        try:
+            fd, branded = tempfile.mkstemp(
+                suffix=".mp4", prefix="vh_brand_", dir=str(destination),
+            )
+            os.close(fd)
+            log_fn("Branding the assembled cut with the brief's type.")
+            brand_fn(str(draft_path), branded, brief, assembled, log_fn)
+            os.replace(branded, draft_path)
+            branded = None
+            record = brand_record(brief, applied=True)
+        except Exception as exc:
+            record = brand_record(brief, applied=False, error=str(exc))
+            log_fn(
+                f"On-screen type skipped ({exc}). "
+                "draft.mp4 is the unbranded cut."
+            )
+        finally:
+            if branded and os.path.exists(branded):
+                os.remove(branded)
+        cuts["brand"] = record
+        scores["brand"] = record
     _write_json(scores_path, scores)
     _write_json(cuts_path, cuts)
     log_fn(f"Wrote {draft_path}")

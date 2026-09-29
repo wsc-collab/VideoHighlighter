@@ -1,16 +1,25 @@
 """Parse a club ``brief.md``.
 
-The file is a short operator note, not a detector preset. Four fields:
+The file is a short operator note, not a detector preset. Required fields:
 
     LENGTH: 20-35s
     STYLE: hype
     KEYWORDS: ace, rally
     NOTES: Prefer the last shot of each point.
 
+Optional on-screen type, drawn on the assembled cut when any of them is set:
+
+    TITLE: Match day
+    SUBTITLE: Woodinville Tennis
+    COLORS: #1B4D3E, #F4E8C1
+    FONT: /path/to/font.ttf
+    CTA: See you Saturday
+
 ``LENGTH`` is the finished draft's duration. A single number (``30s``) means
 that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
 ``NOTES`` may be empty. ``NOTES`` is stored with the run for the editor; it
-is not sent to a generator.
+is not a prompt. A brief with no title, subtitle, or call to action stays a
+highlights cut.
 """
 
 from __future__ import annotations
@@ -32,12 +41,16 @@ _RANGE = re.compile(
     re.IGNORECASE,
 )
 _NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
+_HEX = re.compile(r"^#?([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})$")
 
 STYLES = ("hype", "talking")
 REQUIRED = ("LENGTH", "STYLE")
 # Only these names start a field. A colon inside NOTES ("Prefer: the last
 # point") would otherwise be read as a new key.
-KNOWN_FIELDS = {"LENGTH", "STYLE", "KEYWORDS", "NOTES"}
+KNOWN_FIELDS = {
+    "LENGTH", "STYLE", "KEYWORDS", "NOTES",
+    "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA",
+}
 
 
 @dataclass(frozen=True)
@@ -48,6 +61,18 @@ class Brief:
     keywords: tuple[str, ...]
     notes: str
     source: str = ""
+    title: str = ""
+    subtitle: str = ""
+    colors: tuple[str, ...] = ()
+    font: str = ""
+    cta: str = ""
+
+    def wants_brand(self) -> bool:
+        """True when the brief asks for type on the cut.
+
+        Colors and a font alone do not start a pass: there is nothing to draw.
+        """
+        return bool(self.title or self.subtitle or self.cta)
 
     def as_dict(self) -> dict:
         return {
@@ -56,6 +81,11 @@ class Brief:
             "style": self.style,
             "keywords": list(self.keywords),
             "notes": self.notes,
+            "title": self.title,
+            "subtitle": self.subtitle,
+            "colors": list(self.colors),
+            "font": self.font,
+            "cta": self.cta,
         }
 
 
@@ -90,6 +120,38 @@ def parse_style(text: str) -> str:
     return style
 
 
+def _one_line(text: str) -> str:
+    """Join wrapped brief lines into the single string that gets drawn."""
+    return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
+def parse_colors(text: str) -> tuple[str, ...]:
+    """``#RGB`` or ``#RRGGBB`` values, comma or whitespace separated.
+
+    Stored as ``#RRGGBB``. An empty field is no palette. A bad token is a
+    brief error, caught before any clip is cut.
+    """
+    raw = text.strip()
+    if not raw:
+        return ()
+    colors: list[str] = []
+    for part in re.split(r"[\s,;]+", raw):
+        part = part.strip().strip("\"'")
+        if not part:
+            continue
+        match = _HEX.match(part)
+        if not match:
+            raise BriefError(
+                f"COLORS entry {part!r} is not a hex color. "
+                "Example: COLORS: #1B4D3E, #F4E8C1"
+            )
+        hexes = match.group(1)
+        if len(hexes) == 3:
+            hexes = "".join(ch * 2 for ch in hexes)
+        colors.append("#" + hexes.upper())
+    return tuple(colors)
+
+
 def parse_keywords(text: str) -> tuple[str, ...]:
     """Split on commas, semicolons, and newlines. Leading dashes are bullets."""
     parts = re.split(r"[\n,;]+", text)
@@ -111,9 +173,9 @@ def _split_fields(text: str) -> dict[str, str]:
     """Map FIELD names to their raw text.
 
     A line ``KEY: value`` or a markdown heading ``# KEY`` starts a field when
-    KEY is LENGTH, STYLE, KEYWORDS, or NOTES. Following lines belong to that
-    field until the next known key. Anything else — a title, a sentence with
-    a colon — stays in the current field.
+    KEY is one of the known brief fields. Following lines belong to that
+    field until the next known key. Anything else — a prose heading, a
+    sentence with a colon — stays in the current field.
     """
     fields: dict[str, list[str]] = {}
     current: str | None = None
@@ -159,6 +221,11 @@ def parse_brief(text: str, source: str = "") -> Brief:
         keywords=parse_keywords(fields.get("KEYWORDS", "")),
         notes=fields.get("NOTES", "").strip(),
         source=source,
+        title=_one_line(fields.get("TITLE", "")),
+        subtitle=_one_line(fields.get("SUBTITLE", "")),
+        colors=parse_colors(fields.get("COLORS", "")),
+        font=_one_line(fields.get("FONT", "")),
+        cta=_one_line(fields.get("CTA", "")),
     )
 
 
