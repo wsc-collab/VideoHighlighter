@@ -50,11 +50,13 @@ CTA: Book a lesson
 Tier 1 display face is named. Do not set Interwald, and do not switch
 Tier 1 to Oswald. An explicit `FONT`
 overrides the brand. John Wang packs are Tier 1, so the face is Inter.
-The title and the call to action are bold white, horizontally centered,
-with no stroke and no plate. Captions stay one line: white with a black
-stroke, about 16pt (a little larger on a tall frame, still much smaller
-than the title). A phrase that would overflow becomes the next timed
-caption, not a second line on screen. `TITLE` is still only the brief line.
+The title is bold white, horizontally centered, with no stroke and no
+plate. A call to action, when the brief sets one, uses that same look at
+a slightly smaller size. Captions stay one line: white with a black
+stroke, sized so a short cue of a few words covers about three quarters
+of the frame width, and still smaller than the title. A phrase that
+would overflow becomes the next timed caption, not a second line on
+screen. `TITLE` is still only the brief line.
 
 Install Inter where the app looks for it:
 
@@ -79,9 +81,10 @@ back as a green card or a dark bar with orange type. `COLORS` still
 paints a `hype` highlights card.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
-in the center, one line at a time, about four words, at about 16pt on a
-1080-tall frame (up to 22pt on a taller one). A line that would be wider
-than the frame is the next caption cue. A brief copied from an earlier draft that still says
+in the center, one line at a time, about four words. The point size
+scales with the frame so a short cue covers about 75% of the width, and
+stays under the title. A line that would be wider than the frame is the
+next caption cue. A brief copied from an earlier draft that still says
 `CAPTION_POSITION: bottom` or `CAPTION_SIZE: 42` keeps that old look.
 Delete those two lines. Set them only to override:
 
@@ -101,10 +104,10 @@ CAPTION_POSITION: bottom
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
 | `BRAND` | no | `tier1` (golf and tennis Tier 1), `wsc`, or `bsc`. Picks the default face when `FONT` is omitted. |
 | `FONT` | no | A `.ttf` / `.otf` path, or a font name. Default is Inter for `tier1`, `wsc`, and `bsc`. |
-| `CTA` | no | Optional close, about the last 2–3 seconds. Same as the title: bold white, centered, no stroke. Leave it out for no end line. |
+| `CTA` | no | Optional close, about the last 2–3 seconds. Same as the title (bold white, centered, no stroke, no plate) at a slightly smaller size. Leave it out for no end line. |
 | `CAPTION_COLOR` | no | Drawn as white or black. Default is white. A cream or orange value is drawn as white. |
 | `CAPTION_STROKE` | no | Outline. Default is black behind white type, or white behind black type. Width example: `#000000 3`. |
-| `CAPTION_SIZE` | no | Caption point size. Default is about 16 (at most 22 on a tall frame). |
+| `CAPTION_SIZE` | no | Caption point size. Default scales with frame width so a short cue covers about 75% of the width, and stays smaller than the title. |
 | `CAPTION_POSITION` | no | `center` (default), `bottom`, or `top`. `middle` is the same as `center`. |
 | `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
 
@@ -131,16 +134,17 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   you want the real bold face; otherwise the regular face is used.
 - **Captions** for speech whose middle falls between the title and the
   call to action. Default position is the center of the frame, about four
-  words, one line on screen, about 16pt, white with a black stroke and no
-  box. A phrase that would overflow is the next timed cue, not a second
-  line. The engine is
+  words, one line on screen. The size scales with the frame so a short
+  cue covers about 75% of the width, and stays smaller than the title.
+  Type is white with a black stroke and no box. A phrase that would
+  overflow is the next timed cue, not a second line. The engine is
   local Whisper: `faster-whisper` when that package is installed,
   otherwise `openai-whisper` from `requirements.txt`. No caption is sent
   to a paid API. `--no-whisper` leaves the captions off and does not
   invent lines to fill them.
 - **Call to action** from `CTA`, only when that line is set, for about
-  the last 2.5 seconds. Same as the title: bold white, horizontally
-  centered, no stroke, no plate.
+  the last 2.5 seconds. Same as the title — bold white, horizontally
+  centered, no stroke, no plate — at a slightly smaller size.
 
 `cuts.json` lists every burned line under `captions.cues` with start, end,
 and text, so you can check the words against the recording. A failed burn
@@ -230,8 +234,10 @@ NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as t
 
 Do not copy `COLORS`, `CAPTION_POSITION: bottom`, or `CAPTION_SIZE: 42`
 from an older draft. The title is bold white with no stroke. Captions
-are smaller, one line, white, with a black stroke. A wide phrase is the
-next cue.
+are one line, white, with a black stroke, sized to about 75% of the
+frame width and still smaller than the title. A wide phrase is the
+next cue. A call to action, if you add one, matches the title at a
+slightly smaller size.
 Add `CTA:` only when an end line is wanted.
 
 ```bash
@@ -240,8 +246,9 @@ python -m modules.club "/path/to/lisa-clips"
 
 On `draft.mp4`: the title is the who/what line, bold white, horizontally
 centered, with no stroke and no bar. Captions sit in the center, white
-with a black stroke, about 16pt, one line at a time. A wide phrase is
-the next cue. Those words are the Whisper cues, not the title.
+with a black stroke, one line at a time, covering about 75% of the
+width on a short cue. A wide phrase is the next cue. Those words are
+the Whisper cues, not the title.
 `cuts.json` lists them under `captions.cues`.
 
 If the folder also has a quiet phone zoom of a mic'd take, check

@@ -649,10 +649,10 @@ def test_thirty_second_talking_brief_uses_type_on_the_picture():
     assert brief.length_max_s == 30
     assert brief.caption_position == "center"
     assert brief.caption_size == 0
-    assert caption_style(brief, 1080)["size"] == 16
-    assert caption_style(brief, 1080)["position"] == "center"
-    assert caption_style(brief, 1080)["color"] == "#FFFFFF"
-    assert caption_style(brief, 1080)["stroke"] == "#000000"
+    assert caption_style(brief, 1080, 1920)["size"] > 16
+    assert caption_style(brief, 1080, 1920)["position"] == "center"
+    assert caption_style(brief, 1080, 1920)["color"] == "#FFFFFF"
+    assert caption_style(brief, 1080, 1920)["stroke"] == "#000000"
     windows = talking_windows(30)
     graph = brand_filter(
         brief, 30, "/tmp/Club.ttf", 1920, 1080,
@@ -723,7 +723,7 @@ def test_talking_title_is_editorial_and_type_stays_white():
     assert "0xF4E8C1" not in graph
     assert neutral_ink("#F4E8C1") == "FFFFFF"
     assert neutral_ink("#1B4D3E") == "000000"
-    style = caption_style(brief, 1080)
+    style = caption_style(brief, 1920, 1080)
     assert style["color"] == "#FFFFFF"
     assert style["stroke"] == "#000000"
     cues = caption_cues(
@@ -742,14 +742,14 @@ def test_talking_title_is_editorial_and_type_stays_white():
     )
     assert [cue.text for cue in cues] == ["Hold your finish"]
     black = parse_brief("LENGTH: 20s\nSTYLE: talking\nCAPTION_COLOR: #000000\n")
-    assert caption_style(black, 1080)["color"] == "#000000"
-    assert caption_style(black, 1080)["stroke"] == "#FFFFFF"
+    assert caption_style(black, 1920, 1080)["color"] == "#000000"
+    assert caption_style(black, 1920, 1080)["stroke"] == "#FFFFFF"
     script = render_ass(
         [CaptionCue(4.0, 5.4, "Hold your finish")],
         brief, width=1920, height=1080, font_path="",
     )
     assert "&HFF000000" in script
-    assert ",1,2,0,5," in script
+    assert f",1,{style['stroke_width']},0,5," in script
 
 
 def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
@@ -765,16 +765,22 @@ def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
     assert cues[-1].end == 3.0
     assert all(cue.end > cue.start for cue in cues)
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\n")
+    from modules.club.captions import caption_style
+    size = caption_style(brief, 320, 1080)["size"]
+    shown = split_wide_cues([CaptionCue(1.0, 3.0, long)], 320, size)
     script = render_ass(
         [CaptionCue(1.0, 3.0, long)],
         brief, width=320, height=1080, font_path="",
     )
     assert r"\N" not in script
-    assert script.count("Dialogue:") == len(cues)
+    assert script.count("Dialogue:") == len(shown)
+    assert len(shown) > 1
     assert "WrapStyle: 2" in script
 
 
 def test_title_uses_a_bold_file_when_one_is_installed(tmp_path):
+    import re
+
     from modules.club.brand import bold_font, brand_filter
     from modules.club.captions import talking_windows
     regular = tmp_path / "Inter-Regular.otf"
@@ -795,17 +801,31 @@ def test_title_uses_a_bold_file_when_one_is_installed(tmp_path):
     assert "borderw=0" in graph
     assert "text_align=center" in graph
     assert "(w-tw)/2" in graph
+    sizes = [int(n) for n in re.findall(r"fontsize=(\d+)", graph)]
+    assert len(sizes) == 2
+    assert sizes[0] > sizes[1]
 
 
-def test_caption_defaults_are_center_four_words_and_larger_type():
-    from modules.club.captions import CaptionCue, caption_cues, caption_style, render_ass
+def test_caption_defaults_cover_about_three_quarters_of_the_width():
+    from modules.club.captions import (
+        CAPTION_EM, CAPTION_TYPICAL_CHARS, CAPTION_WIDTH_SHARE,
+        CaptionCue, caption_cues, caption_style, default_caption_size, render_ass,
+    )
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
     assert brief.caption_position == "center"
     assert brief.caption_size == 0
-    assert caption_style(brief, 720)["size"] == 16
-    assert caption_style(brief, 1080)["size"] == 16
-    assert caption_style(brief, 1920)["size"] == 22
-    assert caption_style(brief, 1080)["position"] == "center"
+    # 9:16: a short cue covers about 75% of the width and stays under the title.
+    portrait = default_caption_size(1080, 1920)
+    span = CAPTION_TYPICAL_CHARS * CAPTION_EM * portrait
+    assert span == pytest.approx(1080 * CAPTION_WIDTH_SHARE, rel=0.08)
+    assert portrait < max(18, int(1920 * 0.055))
+    assert caption_style(brief, 1080, 1920)["size"] == portrait
+    # Wider frame, larger captions.
+    assert default_caption_size(1440, 2560) > portrait
+    # Landscape stays under the title even when 75% of the width would not.
+    landscape = default_caption_size(1920, 1080)
+    assert landscape < max(18, int(1080 * 0.055))
+    assert caption_style(brief, 1920, 1080)["position"] == "center"
     middle = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: middle\n")
     assert middle.caption_position == "center"
     words = "one two three four five six".split()
@@ -827,7 +847,7 @@ def test_caption_defaults_are_center_four_words_and_larger_type():
         [CaptionCue(1.0, 2.0, "one two three four")],
         brief, width=1920, height=1080, font_path="",
     )
-    assert f"Style: Caption,DejaVu Sans,{caption_style(brief, 1080)['size']}," in script
+    assert f"Style: Caption,DejaVu Sans,{caption_style(brief, 1920, 1080)['size']}," in script
     assert ",5,40,40,0,1" in script
 
 

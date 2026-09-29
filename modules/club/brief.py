@@ -26,9 +26,10 @@ captions, and the call to action sit on the picture: white type, black
 stroke, no filled plate. ``COLORS`` still paints a hype card, not this pack.
 
 Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
-defaults: captions in the center of the frame, about four words a line,
-and a point size of about 16, a little larger on a tall frame, still
-caption-sized.
+defaults: captions in the center of the frame, one line at a time, sized
+so a short cue covers about three quarters of the frame width, still
+smaller than the title. A call to action uses the title's look at a
+slightly smaller size.
 ``CAPTION_POSITION: bottom`` or ``top`` still works. ``middle`` is the
 same place as ``center``.
 

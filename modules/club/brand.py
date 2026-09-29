@@ -160,6 +160,14 @@ def brand_filter(
     if title_text and sub_text:
         sub_size = min(sub_size, max(16, int(title_size * 0.7)))
     cta_text, cta_size = _fitted(brief.cta, width, height, font_path)
+    # Same face and treatment as the title, a step smaller so the close
+    # does not read as a second title.
+    if centered and cta_text:
+        reference = title_size or cta_size
+        smaller = max(16, int(round(reference * 0.82)))
+        if title_size and smaller >= title_size and title_size > 16:
+            smaller = title_size - 2
+        cta_size = min(cta_size, smaller) if cta_size else smaller
     lower_src = brief.subtitle or brief.title
     lower_text, lower_size = _fitted(lower_src, width, height, font_path)
     if lower_text:

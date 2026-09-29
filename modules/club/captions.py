@@ -4,10 +4,12 @@ The words on screen during the body are the transcript of the assembled
 cut. Nothing in the brief is turned into a caption, and no spoken line is
 copied up into ``TITLE``. The title is the brief's editorial line (who
 and what the video is). ``CTA`` is optional and covers the close when set.
-The middle is whatever was said. The title and the call to action are
-bold white with no stroke. Captions are one line, white with a black
-stroke, about 16pt. A phrase that would overflow becomes the next timed
-cue. Brief ``COLORS`` do not tint them.
+The middle is whatever was said. The title is bold white with no stroke.
+A call to action, when the brief sets one, uses that same look at a
+slightly smaller size. Captions are one line, white with a black stroke,
+sized so a short cue covers about three quarters of the frame width, and
+still smaller than the title. A phrase that would overflow becomes the
+next timed cue. Brief ``COLORS`` do not tint them.
 
 Local Whisper only. ``faster-whisper`` is used when it is installed;
 otherwise the ``openai-whisper`` package already required by the app.
@@ -34,10 +36,12 @@ TALKING_PLATE_S = 2.5
 CAPTION_WORDS = 4
 CAPTION_CHARS = 42
 
-# About 16pt on a 1080-tall frame. A taller frame grows a little and then
-# stops, so captions stay caption-sized and do not catch the title.
-CAPTION_SIZE_AT_1080 = 16
-CAPTION_SIZE_CAP = 22
+# A short cue (a few words, about eighteen characters) should cover about
+# three quarters of the frame. ``CAPTION_EM`` is the same width-per-point
+# estimate the one-line split uses. The result stays under the title.
+CAPTION_TYPICAL_CHARS = 18
+CAPTION_WIDTH_SHARE = 0.75
+CAPTION_EM = 0.55
 
 
 @dataclass(frozen=True)
@@ -245,20 +249,26 @@ def _alignment(position: str) -> int:
     return 5
 
 
-def default_caption_size(height: int) -> int:
+def default_caption_size(width: int, height: int) -> int:
     """Point size when ``CAPTION_SIZE`` is omitted.
 
-    16 at 1080px tall. Taller frames scale up only as far as
-    ``CAPTION_SIZE_CAP``.
+    Chosen so a short cue of about ``CAPTION_TYPICAL_CHARS`` covers
+    ``CAPTION_WIDTH_SHARE`` of ``width``. Capped under the title's starting
+    size (``height * 0.055``) so a wide frame does not grow captions past
+    the title.
     """
-    scaled = int(round(CAPTION_SIZE_AT_1080 * max(int(height), 1) / 1080))
-    return max(CAPTION_SIZE_AT_1080, min(CAPTION_SIZE_CAP, scaled))
+    width = max(int(width), 1)
+    height = max(int(height), 1)
+    size = (width * CAPTION_WIDTH_SHARE) / (CAPTION_TYPICAL_CHARS * CAPTION_EM)
+    title = max(18, int(height * 0.055))
+    size = min(size, title * 0.8)
+    return max(18, int(round(size)))
 
 
 def _line_capacity(frame_width: int, font_size: int) -> tuple[int, float]:
     """``(max characters, pixels per character)`` for one caption line."""
     usable = max(40, int(max(frame_width, 1) * 0.82))
-    char_px = max(1.0, float(font_size) * 0.55)
+    char_px = max(1.0, float(font_size) * CAPTION_EM)
     return max(8, int(usable / char_px)), char_px
 
 
@@ -315,7 +325,7 @@ def split_wide_cues(cues, frame_width: int, font_size: int) -> list[CaptionCue]:
     return shown
 
 
-def caption_style(brief: Brief, height: int) -> dict:
+def caption_style(brief: Brief, width: int, height: int) -> dict:
     """Resolved caption look. Type is white or black, with the other as the stroke.
 
     ``COLORS`` does not tint captions. A cream or orange ``CAPTION_COLOR``
@@ -331,7 +341,7 @@ def caption_style(brief: Brief, height: int) -> dict:
         stroke_ink = "000000" if ink == "FFFFFF" else "FFFFFF"
     color = f"#{ink}"
     stroke = f"#{stroke_ink}"
-    size = brief.caption_size or default_caption_size(height)
+    size = brief.caption_size or default_caption_size(width, height)
     width = brief.caption_stroke_width or max(1, min(3, size // 8))
     return {
         "color": color,
@@ -377,7 +387,7 @@ def _font_face(brief: Brief, resolved_path: str) -> tuple[str, str]:
 def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
                font_path: str) -> str:
     """An ASS script of the spoken lines. Title and CTA are not in here."""
-    style = caption_style(brief, height)
+    style = caption_style(brief, width, height)
     face, _folder = _font_face(brief, font_path)
     align = _alignment(style["position"])
     margin_v = 0 if style["position"] in ("middle", "center") else 48
@@ -570,7 +580,7 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
     if cues:
         # Replace the caller's list so cuts.json matches the one-line cues.
         cues[:] = split_wide_cues(
-            list(cues), width, caption_style(brief, height)["size"],
+            list(cues), width, caption_style(brief, width, height)["size"],
         )
         if not font:
             raise RuntimeError(
