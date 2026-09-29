@@ -216,6 +216,8 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
     assert cuts["policy"]["generated_songs"] is False
     assert cuts["brand"]["requested"] is False
     assert cuts["brand"]["applied"] is False
+    assert cuts["captions"]["requested"] is False
+    assert cuts["captions"]["cues"] == []
     assert cuts["draft_written"] is True
     assert 6 <= cuts["assembled_seconds"] <= 10
     assert cuts["within_brief"] is True
@@ -406,6 +408,155 @@ def test_resolve_font_prefers_an_existing_file(tmp_path):
     font = tmp_path / "Club.ttf"
     font.write_bytes(b"font")
     assert resolve_font(str(font)) == str(font.resolve())
+
+
+TALKING = """\
+LENGTH: 6-10s
+STYLE: talking
+TITLE: Match day
+CTA: See you Saturday
+FONT: DejaVu Sans
+CAPTION_COLOR: #FFFFFF
+CAPTION_STROKE: #000000 3
+CAPTION_SIZE: 42
+CAPTION_POSITION: bottom
+KEYWORDS:
+NOTES: This note is not a caption.
+"""
+
+
+def test_caption_fields_and_a_bad_position():
+    brief = parse_brief(TALKING)
+    assert brief.caption_color == "#FFFFFF"
+    assert brief.caption_stroke == "#000000"
+    assert brief.caption_stroke_width == 3
+    assert brief.caption_size == 42
+    assert brief.caption_position == "bottom"
+    assert brief.wants_brand() is True
+    with pytest.raises(BriefError):
+        parse_brief("LENGTH: 10s\nSTYLE: talking\nCAPTION_POSITION: karaoke\n")
+
+
+def test_caption_cues_are_spoken_words_inside_the_body():
+    from modules.club.captions import caption_cues, render_ass, talking_windows
+    windows = talking_windows(12)
+    body_start, body_end = windows["captions"]
+    assert windows["title"] == pytest.approx((0.0, 2.5))
+    assert windows["lower"] == (0.0, 0.0)
+    assert body_start == pytest.approx(2.5)
+    assert body_end == pytest.approx(9.5)
+    segments = [
+        {"start": 0.2, "end": 1.5, "text": "too early for captions"},
+        {
+            "start": 3.0,
+            "end": 6.0,
+            "text": "we play at four on saturday morning",
+            "words": [
+                {"start": 3.0, "end": 3.4, "word": "we"},
+                {"start": 3.4, "end": 3.8, "word": "play"},
+                {"start": 3.8, "end": 4.1, "word": "at"},
+                {"start": 4.1, "end": 4.5, "word": "four"},
+                {"start": 4.5, "end": 4.8, "word": "on"},
+                {"start": 4.8, "end": 5.3, "word": "saturday"},
+                {"start": 5.3, "end": 5.8, "word": "morning"},
+            ],
+        },
+        {"start": 10.0, "end": 11.5, "text": "join us this weekend"},
+    ]
+    cues = caption_cues(segments, body_start=body_start, body_end=body_end)
+    blob = " ".join(cue.text for cue in cues)
+    assert blob == "we play at four on saturday morning"
+    assert "too early" not in blob
+    assert "join us" not in blob
+    assert "This note is not a caption" not in blob
+    assert cues[0].start >= body_start
+    assert cues[-1].end <= body_end + 0.05
+    brief = parse_brief(TALKING)
+    script = render_ass(cues, brief, width=1280, height=720, font_path="")
+    assert "Dialogue:" in script
+    assert "we play at four" in script or "we play" in script
+    assert "Style: Caption,DejaVu Sans,42," in script
+    assert "&H00FFFFFF&" in script
+    assert "&H00000000&" in script
+    assert "join us" not in script
+
+
+def test_talking_pack_burns_title_captions_and_cta(tmp_path):
+    (tmp_path / "brief.md").write_text(TALKING, encoding="utf-8")
+    (tmp_path / "talk.mp4").write_bytes(b"t")
+    seen = {}
+
+    def caption_transcribe(path, model, log_fn):
+        seen["path"] = Path(path).name
+        seen["model"] = model
+        return {
+            "engine": "test",
+            "segments": [
+                {"start": 0.2, "end": 1.0, "text": "too early"},
+                {"start": 3.0, "end": 5.0, "text": "we play at four"},
+                {"start": 7.0, "end": 7.8, "text": "saved for the end card"},
+            ],
+        }
+
+    def caption_burn(src, dst, brief, duration, cues, log_fn=print):
+        seen["cues"] = [cue.text for cue in cues]
+        seen["title"] = brief.title
+        seen["cta"] = brief.cta
+        Path(dst).write_bytes(b"talking")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=True,
+        whisper_model="tiny",
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0, 0, 1, 0, 0, 0, 0, 0],
+        transcribe=lambda *_a, **_k: [],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=lambda files, output, log_fn=print: Path(output).write_bytes(b"draft") or output,
+        caption_transcribe=caption_transcribe,
+        caption_burn=caption_burn,
+    )
+    assert seen["path"] == "draft.mp4"
+    assert seen["model"] == "tiny"
+    assert seen["cues"] == ["we play at four"]
+    assert seen["title"] == "Match day"
+    assert seen["cta"] == "See you Saturday"
+    assert cuts["captions"]["burned"] is True
+    assert cuts["captions"]["engine"] == "test"
+    assert cuts["captions"]["source"] == "speech"
+    assert [row["text"] for row in cuts["captions"]["cues"]] == ["we play at four"]
+    assert cuts["brand"]["applied"] is True
+    assert cuts["policy"]["generated_voices"] is False
+    assert (tmp_path / "draft.mp4").read_bytes() == b"talking"
+
+
+def test_talking_without_whisper_does_not_invent_captions(tmp_path):
+    (tmp_path / "brief.md").write_text(TALKING, encoding="utf-8")
+    (tmp_path / "talk.mp4").write_bytes(b"t")
+
+    def caption_transcribe(*_a, **_k):
+        raise AssertionError("whisper is off")
+
+    def caption_burn(src, dst, brief, duration, cues, log_fn=print):
+        assert cues == []
+        Path(dst).write_bytes(b"title-only")
+
+    cuts = run_club_montage(
+        tmp_path,
+        use_whisper=False,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0, 0, 1, 0, 0, 0, 0, 0],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=lambda files, output, log_fn=print: Path(output).write_bytes(b"draft") or output,
+        caption_transcribe=caption_transcribe,
+        caption_burn=caption_burn,
+    )
+    assert cuts["captions"]["engine"] == "skipped"
+    assert cuts["captions"]["cues"] == []
+    assert cuts["captions"]["burned"] is True
+    assert (tmp_path / "draft.mp4").read_bytes() == b"title-only"
 
 
 def test_main_py_runs_club_before_the_gui_imports():

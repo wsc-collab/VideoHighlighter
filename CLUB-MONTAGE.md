@@ -1,14 +1,21 @@
 # Club montages
 
-This fork builds review drafts for Woodinville Sports Club and Tier 1 club
-montages (tennis, golf, APL). A folder of **real clips** plus a `brief.md`
-becomes a ranked cut list and one assembled file.
+This fork's club path is a **talking pack** for Woodinville Sports Club and
+Tier 1 (tennis, golf, APL): people speaking on camera. A folder of real
+clips plus a `brief.md` becomes one file:
 
-The club path cuts windows out of those clips and joins the windows. When
-the brief includes a title, subtitle, or call to action, that type is drawn
-on the joined cut. It does not generate B-roll, faces, voices, or songs. If
-a moment is missing, the fix is another real clip or a different in/out in
-`cuts.json`.
+1. **Title** over about the first 2–3 seconds.
+2. **Captions** of what is said through the middle, from local Whisper.
+3. **Call to action** over the close.
+
+Cuts are straight joins. The path does not build CapCut-style flashy
+montages, and it does not generate B-roll, faces, voices, or songs. Silent
+hype reels stay in CapCut Web: drop the clips there and edit the template
+text. This repo does not automate CapCut.
+
+If a moment is missing, the fix is another real clip or a different in/out
+in `cuts.json`. Caption lines are the transcript. They are not copy written
+in the brief.
 
 The desktop highlighter is unchanged. Automated runs use the CLI below.
 
@@ -19,60 +26,76 @@ type fields are optional: leave them out and the run stays a highlights cut.
 
 ```text
 LENGTH: 20-35s
-STYLE: hype
+STYLE: talking
 TITLE: Match day
-SUBTITLE: Woodinville Tennis
-COLORS: #1B4D3E, #F4E8C1
-FONT: DejaVu Sans
 CTA: See you Saturday
-KEYWORDS: ace, rally, birdie
-NOTES: Prefer the last shot of the point. Keep the original audio.
+FONT: DejaVu Sans
+COLORS: #1B4D3E, #F4E8C1
+CAPTION_COLOR: #FFFFFF
+CAPTION_STROKE: #000000 3
+CAPTION_SIZE: 42
+CAPTION_POSITION: bottom
+KEYWORDS: lesson, clinic
+NOTES: Keep the coach's answer. Do not write caption copy here.
 ```
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `LENGTH` | yes | Finished draft length. `20-35s` is a range. `30s` is exact. |
-| `STYLE` | yes | `hype` or `talking`. |
-| `KEYWORDS` | no | Words to boost when local Whisper hears them. Commas or bullets. |
-| `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt. |
-| `TITLE` | no | Opening title, drawn on the first seconds of the real cut. |
-| `SUBTITLE` | no | Second line on the title card, and the lower third. |
-| `COLORS` | no | Hex colors. The first is the bar, the second is the type. |
+| `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
+| `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
+| `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
+| `TITLE` | no | Opening title, about the first 2–3 seconds of the real cut. |
+| `SUBTITLE` | no | Optional second line on that opening card only. |
+| `COLORS` | no | Hex colors. The first is the title/CTA bar, the second is that type. |
 | `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
-| `CTA` | no | End-card line, drawn on the closing seconds of the real cut. |
+| `CTA` | no | End card, about the last 2–3 seconds of the real cut. |
+| `CAPTION_COLOR` | no | Caption fill. Default is white, or the second `COLORS` value when that is set. |
+| `CAPTION_STROKE` | no | Outline color and optional width, e.g. `#000000 3`. Default is black, 3. |
+| `CAPTION_SIZE` | no | Caption point size. Default follows the frame height. |
+| `CAPTION_POSITION` | no | `bottom` (default), `middle`, or `top`. |
+| `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
 
-`hype` favours audio peaks and motion, and plays the strongest windows first.
 `talking` favours speech and keywords, and plays clips in name order, then
-time order, so a conversation stays in sequence.
+time order, so a conversation stays in sequence. `hype` favours audio peaks
+and motion. Use it only when you want a highlights cut inside this tool.
+A silent hype montage belongs in CapCut, not here.
 
 Heading form works too (`## LENGTH` on its own line, value underneath).
 A colon inside `NOTES` stays part of the note.
 
 Keywords are supplied per brief. The app has no built-in sport category list.
 
-## On-screen type
+## Talking pack
 
-`TITLE`, `SUBTITLE`, and `CTA` are burned onto `draft.mp4` after the clips
-are joined. The pass does not add frames and does not replace the picture.
-A bar in the brief's first color sits behind the words; the second color is
-the type. One color keeps that bar and chooses black or white type for
-contrast. With no `COLORS`, the bar is near-black and the type is white.
+After the clips are joined, `STYLE: talking` runs one more local pass on
+`draft.mp4`:
 
-Timing on a cut long enough for three bands (about two and a half seconds
-and up):
+- **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
+  seconds. On a cut under about eight seconds the plate shrinks so it
+  cannot cover the captions.
+- **Captions** for speech whose middle falls between the title and the
+  call to action. The engine is local Whisper: `faster-whisper` when that
+  package is installed, otherwise `openai-whisper` from
+  `requirements.txt`. No caption is sent to a paid API. `--no-whisper`
+  leaves the captions off and does not invent lines to fill them.
+- **Call to action** from `CTA` for about the last 2.5 seconds.
 
-- Title card: `TITLE` and `SUBTITLE` over the opening.
-- Lower third: `SUBTITLE`, or `TITLE` when there is no subtitle, through the middle.
-- End card: `CTA` over the close.
+`cuts.json` lists every burned line under `captions.cues` with start, end,
+and text, so you can check the words against the recording. A failed burn
+keeps the unbranded `draft.mp4` and sets `captions.error`.
 
-Shorter cuts drop the lower third so the title and the call to action do
-not stack. `FONT` is a file path when that file exists, otherwise a font
-name (`Arial`, `DejaVu Sans`, `Helvetica`). If the font cannot be found, a
-bold sans already on the machine is used. If drawing fails, `draft.mp4`
-stays the unbranded cut and `cuts.json` records `brand.error`.
+Whisper is already in `requirements.txt`. The first run downloads the
+model weights into the local cache. Install ffmpeg as below; the caption
+burn needs ffmpeg built with libass (`subtitles` filter), which a normal
+ffmpeg package includes. `faster-whisper` is optional:
 
-`brand.requested` is false when the brief has no title, subtitle, or call
-to action. Colors or a font alone do not start the pass.
+```bash
+pip install faster-whisper
+```
+
+It is MIT-licensed, runs on CPU, and is used only if the import succeeds.
+The app does not add a CapCut client or a web product surface for this pack.
 
 ## Run
 

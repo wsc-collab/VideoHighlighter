@@ -7,19 +7,24 @@ The file is a short operator note, not a detector preset. Required fields:
     KEYWORDS: ace, rally
     NOTES: Prefer the last shot of each point.
 
-Optional on-screen type, drawn on the assembled cut when any of them is set:
+``STYLE: talking`` is the club pack: a title for the opening seconds,
+burned-in captions of what is said, and a call to action at the end.
+Caption words come from the recording. They are not written in the brief.
 
     TITLE: Match day
-    SUBTITLE: Woodinville Tennis
-    COLORS: #1B4D3E, #F4E8C1
-    FONT: /path/to/font.ttf
     CTA: See you Saturday
+    FONT: DejaVu Sans
+    COLORS: #1B4D3E, #F4E8C1
+    CAPTION_COLOR: #FFFFFF
+    CAPTION_STROKE: #000000 3
+    CAPTION_SIZE: 42
+    CAPTION_POSITION: bottom
 
 ``LENGTH`` is the finished draft's duration. A single number (``30s``) means
 that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
-``NOTES`` may be empty. ``NOTES`` is stored with the run for the editor; it
-is not a prompt. A brief with no title, subtitle, or call to action stays a
-highlights cut.
+``NOTES`` may be empty. ``NOTES`` is stored for the editor. It is not a
+prompt and it is not caption text. Without a title, subtitle, or call to
+action, a non-talking brief stays a highlights cut.
 """
 
 from __future__ import annotations
@@ -50,7 +55,10 @@ REQUIRED = ("LENGTH", "STYLE")
 KNOWN_FIELDS = {
     "LENGTH", "STYLE", "KEYWORDS", "NOTES",
     "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA",
+    "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
+    "CAPTION_POSITION", "CAPTION_FONT",
 }
+CAPTION_POSITIONS = ("bottom", "middle", "top")
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,12 @@ class Brief:
     colors: tuple[str, ...] = ()
     font: str = ""
     cta: str = ""
+    caption_color: str = ""
+    caption_stroke: str = ""
+    caption_stroke_width: int = 0
+    caption_size: int = 0
+    caption_position: str = "bottom"
+    caption_font: str = ""
 
     def wants_brand(self) -> bool:
         """True when the brief asks for type on the cut.
@@ -86,6 +100,12 @@ class Brief:
             "colors": list(self.colors),
             "font": self.font,
             "cta": self.cta,
+            "caption_color": self.caption_color,
+            "caption_stroke": self.caption_stroke,
+            "caption_stroke_width": self.caption_stroke_width,
+            "caption_size": self.caption_size,
+            "caption_position": self.caption_position,
+            "caption_font": self.caption_font,
         }
 
 
@@ -152,6 +172,64 @@ def parse_colors(text: str) -> tuple[str, ...]:
     return tuple(colors)
 
 
+def parse_caption_position(text: str) -> str:
+    raw = text.strip().lower()
+    if not raw:
+        return "bottom"
+    if raw not in CAPTION_POSITIONS:
+        raise BriefError(
+            f"CAPTION_POSITION must be bottom, middle, or top, got {text!r}."
+        )
+    return raw
+
+
+def parse_caption_size(text: str) -> int:
+    raw = text.strip()
+    if not raw:
+        return 0
+    try:
+        size = int(float(raw))
+    except ValueError:
+        raise BriefError(
+            f"CAPTION_SIZE must be a point size, got {text!r}."
+        ) from None
+    if size <= 0:
+        raise BriefError("CAPTION_SIZE must be greater than zero.")
+    return size
+
+
+def parse_caption_stroke(text: str) -> tuple[str, int]:
+    """``#000000`` or ``#000000 3``. Empty means the burn-in default."""
+    raw = text.strip()
+    if not raw:
+        return "", 0
+    color = ""
+    width = 0
+    for part in re.split(r"[\s,]+", raw):
+        if not part:
+            continue
+        if _HEX.match(part):
+            color = parse_colors(part)[0]
+            continue
+        if re.fullmatch(r"\d+", part):
+            width = int(part)
+            continue
+        raise BriefError(
+            f"CAPTION_STROKE entry {part!r} is not a hex color or a width. "
+            "Example: CAPTION_STROKE: #000000 3"
+        )
+    return color, width
+
+
+def parse_caption_color(text: str) -> str:
+    colors = parse_colors(text)
+    if len(colors) > 1:
+        raise BriefError(
+            "CAPTION_COLOR takes one hex color. Example: CAPTION_COLOR: #FFFFFF"
+        )
+    return colors[0] if colors else ""
+
+
 def parse_keywords(text: str) -> tuple[str, ...]:
     """Split on commas, semicolons, and newlines. Leading dashes are bullets."""
     parts = re.split(r"[\n,;]+", text)
@@ -214,6 +292,7 @@ def parse_brief(text: str, source: str = "") -> Brief:
         )
     lo, hi = parse_length(fields["LENGTH"])
     style = parse_style(fields["STYLE"])
+    stroke_color, stroke_width = parse_caption_stroke(fields.get("CAPTION_STROKE", ""))
     return Brief(
         length_min_s=lo,
         length_max_s=hi,
@@ -226,6 +305,12 @@ def parse_brief(text: str, source: str = "") -> Brief:
         colors=parse_colors(fields.get("COLORS", "")),
         font=_one_line(fields.get("FONT", "")),
         cta=_one_line(fields.get("CTA", "")),
+        caption_color=parse_caption_color(fields.get("CAPTION_COLOR", "")),
+        caption_stroke=stroke_color,
+        caption_stroke_width=stroke_width,
+        caption_size=parse_caption_size(fields.get("CAPTION_SIZE", "")),
+        caption_position=parse_caption_position(fields.get("CAPTION_POSITION", "")),
+        caption_font=_one_line(fields.get("CAPTION_FONT", "")),
     )
 
 

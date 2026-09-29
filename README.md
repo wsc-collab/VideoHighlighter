@@ -108,12 +108,13 @@ Portable builds, GPU setup, where it writes, and fixing an oversized UI:
 
 ## Club montages
 
-This fork adds a command-line path for Woodinville Sports Club / Tier 1
-montages. Point it at a folder of real clips and a `brief.md` (`LENGTH`,
-`STYLE` `hype` or `talking`, `KEYWORDS`, `NOTES`). It ranks windows with
-local Whisper, audio peaks, and motion, then assembles `draft.mp4`.
-Optional `TITLE`, `SUBTITLE`, `COLORS`, `FONT`, and `CTA` are drawn on
-that cut. A brief without them stays highlights only.
+This fork's club path is a talking pack: a folder of real clips and a
+`brief.md` (`LENGTH`, `STYLE: talking`, `TITLE`, `CTA`, optional caption
+color, stroke, size, and position). It ranks windows with local Whisper,
+audio peaks, and motion, joins a straight cut, then burns a title for the
+opening seconds, captions of what was said, and a call to action at the
+end. Caption words come from the speech. Silent hype montages stay in
+CapCut; this repo does not automate those templates.
 
 ```bash
 python -m modules.club "/path/to/clips"

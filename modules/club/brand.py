@@ -99,16 +99,20 @@ def brand_filter(
     font_path: str,
     width: int = 1920,
     height: int = 1080,
+    windows: dict | None = None,
 ) -> str:
     """The ffmpeg ``-vf`` graph, or ``""`` when there is nothing to draw.
 
     ``font_path`` is a filesystem path. It is escaped for drawtext here.
+    ``windows`` overrides the default title / lower-third / end timing.
+    A talking pack passes windows whose lower third is empty so captions
+    own the middle of the cut.
     """
     if not brief.wants_brand():
         return ""
     from modules.media.transitions import _escape_path, _escape_text
 
-    windows = plate_windows(duration)
+    windows = windows if windows is not None else plate_windows(duration)
     bar, ink = brand_colors(brief.colors)
     font = _escape_path(font_path) if font_path else ""
     if not font:

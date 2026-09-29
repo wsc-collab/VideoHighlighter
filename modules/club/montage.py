@@ -12,9 +12,10 @@ concatenate those ranges. Weights change which windows are kept. They do
 not create pictures, faces, voices, or songs.
 
 When the brief sets ``TITLE``, ``SUBTITLE``, or ``CTA``, a second ffmpeg
-pass draws that type on the assembled cut (colors and font included). A
-brief without those fields stays a highlights cut. ``NOTES`` is copied into
-the JSON for the person reviewing the draft. It is not a prompt.
+pass draws that type on the assembled cut. ``STYLE: talking`` also burns
+captions of the speech between the title and the call to action. Those
+words come from local Whisper. ``NOTES`` is copied into the JSON for the
+editor. It is not a prompt and it is not caption text.
 """
 
 from __future__ import annotations
@@ -35,6 +36,13 @@ import numpy as np
 
 from modules.club.brief import Brief, BriefError, load_brief
 from modules.club.brand import apply_brand, brand_record
+from modules.club.captions import (
+    apply_talking_pack,
+    caption_cues,
+    caption_record,
+    talking_windows,
+    transcribe_captions,
+)
 
 
 # Stated on every run so a later reader can see what the files are.
@@ -47,6 +55,7 @@ ASSEMBLE_ONLY = {
     "note": (
         "Windows are cut from the supplied clips and concatenated. "
         "On-screen type, when the brief asks for it, is drawn on that cut. "
+        "Talking captions are the speech in that cut, not written copy. "
         "Nothing is synthesized: no B-roll, faces, voices, or songs."
     ),
 }
@@ -471,6 +480,74 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _burn_talking_pack(
+    draft_path, destination, brief, assembled, cuts, scores, *,
+    use_whisper: bool, whisper_model: str, caption_fn, talking_burn, log_fn,
+) -> None:
+    """Title, speech captions, and CTA on a talking cut.
+
+    Caption text is the transcript of ``draft_path``. A missing transcript
+    still draws the title and the call to action. A failed burn leaves the
+    unbranded file in place.
+    """
+    windows = talking_windows(assembled)
+    body_start, body_end = windows["captions"]
+    segments: list = []
+    engine = None
+    error = None
+    if not use_whisper:
+        engine = "skipped"
+        log_fn("Captions skipped. Whisper is off, so no speech was read.")
+    else:
+        try:
+            raw = caption_fn(str(draft_path), whisper_model, log_fn)
+            if isinstance(raw, dict) and "segments" in raw:
+                engine = raw.get("engine") or "whisper"
+                segments = list(raw.get("segments") or [])
+            else:
+                engine = "whisper"
+                segments = list(raw or [])
+        except Exception as exc:
+            engine = "error"
+            error = str(exc)
+            log_fn(f"Caption transcript failed ({exc}). Title and CTA still draw.")
+    cues = caption_cues(segments, body_start=body_start, body_end=body_end)
+    record = caption_record(brief, cues=cues, engine=engine, burned=False, error=error)
+    if not cues and not brief.wants_brand():
+        cuts["captions"] = record
+        scores["captions"] = record
+        return
+    branded = None
+    try:
+        fd, branded = tempfile.mkstemp(
+            suffix=".mp4", prefix="vh_brand_", dir=str(destination),
+        )
+        os.close(fd)
+        talking_burn(str(draft_path), branded, brief, assembled, cues, log_fn)
+        os.replace(branded, draft_path)
+        branded = None
+        record = caption_record(brief, cues=cues, engine=engine, burned=True, error=error)
+        if brief.wants_brand():
+            cuts["brand"] = brand_record(brief, applied=True)
+            scores["brand"] = cuts["brand"]
+    except Exception as exc:
+        record = caption_record(
+            brief, cues=cues, engine=engine, burned=False,
+            error=error or str(exc),
+        )
+        if brief.wants_brand():
+            cuts["brand"] = brand_record(brief, applied=False, error=str(exc))
+            scores["brand"] = cuts["brand"]
+        log_fn(
+            f"Talking pack skipped ({exc}). draft.mp4 is the unbranded cut."
+        )
+    finally:
+        if branded and os.path.exists(branded):
+            os.remove(branded)
+    cuts["captions"] = record
+    scores["captions"] = record
+
+
 def run_club_montage(
     folder: str | Path,
     *,
@@ -487,6 +564,8 @@ def run_club_montage(
     cut=None,
     combine=None,
     brand=None,
+    caption_transcribe=None,
+    caption_burn=None,
 ) -> dict:
     """Score ``folder`` against its brief and write the three outputs.
 
@@ -508,6 +587,8 @@ def run_club_montage(
     cut_fn = cut or default_cut
     combine_fn = combine or default_combine
     brand_fn = brand or apply_brand
+    caption_fn = caption_transcribe or transcribe_captions
+    talking_burn = caption_burn or apply_talking_pack
 
     whisper_status = "skipped" if not use_whisper else whisper_model
     transcribe_live = transcribe_fn
@@ -528,6 +609,13 @@ def run_club_montage(
         f"STYLE {brief.style}."
     )
     log_fn(ASSEMBLE_ONLY["note"])
+    if brief.style == "hype":
+        log_fn(
+            "STYLE hype cuts highlights only. Silent hype montages stay in "
+            "CapCut; this pack does not build them."
+        )
+    elif brief.style == "talking":
+        log_fn("Talking pack: title, captions of the speech, then the call to action.")
 
     clip_reports = []
     windows: list[Window] = []
@@ -608,6 +696,7 @@ def run_club_montage(
         "within_brief": bool(within and ordered),
         "draft_written": False,
         "brand": brand_record(brief),
+        "captions": caption_record(brief),
         "windows": rows,
     }
     cuts = {
@@ -623,6 +712,7 @@ def run_club_montage(
         "keywords": list(brief.keywords),
         "draft_written": False,
         "brand": brand_record(brief),
+        "captions": caption_record(brief),
         "cuts": [
             w.as_dict(selected=True, play_index=i)
             for i, w in enumerate(ordered)
@@ -665,7 +755,16 @@ def run_club_montage(
 
     cuts["draft_written"] = True
     scores["draft_written"] = True
-    if brief.wants_brand():
+    if brief.style == "talking":
+        _burn_talking_pack(
+            draft_path, destination, brief, assembled, cuts, scores,
+            use_whisper=use_whisper and whisper_status == whisper_model,
+            whisper_model=whisper_model,
+            caption_fn=caption_fn,
+            talking_burn=talking_burn,
+            log_fn=log_fn,
+        )
+    elif brief.wants_brand():
         branded = None
         try:
             fd, branded = tempfile.mkstemp(
@@ -699,8 +798,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="club-montage",
         description=(
-            "Assemble a draft montage from a folder of real clips and a brief.md. "
-            "Cuts and concatenates only. Does not generate footage, faces, voices, or music."
+            "Assemble a talking cut from real clips and a brief.md. "
+            "Burns a title, captions of the speech, and a call to action. "
+            "Does not generate footage, faces, voices, or music."
         ),
     )
     parser.add_argument("folder", nargs="?", help="Folder containing the clips and brief.md")
