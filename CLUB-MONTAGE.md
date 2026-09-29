@@ -39,7 +39,9 @@ NOTES: Keep the coach's answer. Do not write caption copy here.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
 in the center, about four words a line, at a size that follows the frame
-and is at least 64pt. Set them only to override:
+and is at least 64pt. A brief copied from the earlier Dan draft that still
+says `CAPTION_POSITION: bottom` or `CAPTION_SIZE: 42` keeps that old look.
+Delete those two lines. Set them only to override:
 
 ```text
 CAPTION_SIZE: 72
@@ -161,6 +163,37 @@ In order of preference:
 
 `hype` weights peaks and motion higher. `talking` weights speech and keywords
 higher. Neither style synthesizes media.
+
+### Lisa, 30 seconds
+
+Re-run from this branch (`cursor/club-montage-ops-8c48`). Put the clips in
+one folder with this `brief.md`. Do not copy `CAPTION_SIZE` or
+`CAPTION_POSITION` from the Dan draft.
+
+```text
+LENGTH: 30s
+STYLE: talking
+TITLE: Match day
+CTA: See you Saturday
+FONT: DejaVu Sans
+COLORS: #1B4D3E, #F4E8C1
+KEYWORDS: lesson, clinic
+NOTES: Keep the coach's answer. Do not write caption copy here.
+```
+
+```bash
+python -m modules.club "/path/to/lisa-clips"
+```
+
+On `draft.mp4`: the title and the call to action are centered on a solid
+plate (the picture does not show through the bar). Captions sit in the
+center of the frame, about four words a line, larger than 42pt. The words
+are still the Whisper cues. `cuts.json` lists them under `captions.cues`.
+
+If the folder also has a quiet phone zoom of a mic'd take, check
+`mic_preference` in `cuts.json`. A file 12 dB or more under the loudest
+clip is left out. A face-zoom that is about as loud as the mic is not
+detected; leave that file out of the folder by hand.
 
 ### Quiet takes in a talking folder
 

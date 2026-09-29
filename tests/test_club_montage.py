@@ -590,6 +590,50 @@ def test_talking_without_whisper_does_not_invent_captions(tmp_path):
     assert (tmp_path / "draft.mp4").read_bytes() == b"title-only"
 
 
+def test_thirty_second_talking_brief_uses_centered_solid_type():
+    """The Lisa re-run: LENGTH 30s, no caption size or position in the brief."""
+    from modules.club.brand import brand_filter
+    from modules.club.captions import caption_cues, caption_style, talking_windows
+    brief = parse_brief(
+        "LENGTH: 30s\nSTYLE: talking\nTITLE: Match day\n"
+        "CTA: See you Saturday\nFONT: DejaVu Sans\n"
+        "COLORS: #1B4D3E, #F4E8C1\n"
+    )
+    assert brief.length_min_s == 30
+    assert brief.length_max_s == 30
+    assert brief.caption_position == "center"
+    assert brief.caption_size == 0
+    assert caption_style(brief, 1080)["size"] >= 64
+    assert caption_style(brief, 1080)["position"] == "center"
+    windows = talking_windows(30)
+    graph = brand_filter(
+        brief, 30, "/tmp/Club.ttf", 1920, 1080,
+        windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
+        centered=True,
+    )
+    assert "0x1B4D3E@1" in graph
+    assert "@0.78" not in graph
+    assert "(w-tw)/2" in graph
+    assert "(h-th)/2" in graph
+    assert "y=h*0.05" not in graph
+    assert "drawbox=x=0:y=0:" not in graph
+    words = "we play at four on saturday".split()
+    cues = caption_cues(
+        [{
+            "start": 4.0,
+            "end": 8.0,
+            "text": "we play at four on saturday",
+            "words": [
+                {"start": 4.0 + i * 0.4, "end": 4.3 + i * 0.4, "word": word}
+                for i, word in enumerate(words)
+            ],
+        }],
+        body_start=windows["captions"][0],
+        body_end=windows["captions"][1],
+    )
+    assert [cue.text for cue in cues] == ["we play at four", "on saturday"]
+
+
 def test_caption_defaults_are_center_four_words_and_larger_type():
     from modules.club.captions import CaptionCue, caption_cues, caption_style, render_ass
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
