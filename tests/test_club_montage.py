@@ -347,8 +347,10 @@ def test_talking_title_and_cta_sit_on_the_picture():
     assert "drawbox=" not in graph
     assert "box=1" not in graph
     assert "box=0" in graph
+    assert "borderw=0" in graph
+    assert "text_align=center" in graph
     assert "fontcolor=0xFFFFFF" in graph
-    assert "bordercolor=0x000000" in graph
+    assert "bordercolor" not in graph
     assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
@@ -647,7 +649,7 @@ def test_thirty_second_talking_brief_uses_type_on_the_picture():
     assert brief.length_max_s == 30
     assert brief.caption_position == "center"
     assert brief.caption_size == 0
-    assert caption_style(brief, 1080)["size"] >= 64
+    assert caption_style(brief, 1080)["size"] == 16
     assert caption_style(brief, 1080)["position"] == "center"
     assert caption_style(brief, 1080)["color"] == "#FFFFFF"
     assert caption_style(brief, 1080)["stroke"] == "#000000"
@@ -660,8 +662,10 @@ def test_thirty_second_talking_brief_uses_type_on_the_picture():
     assert "drawbox=" not in graph
     assert "box=1" not in graph
     assert "box=0" in graph
+    assert "borderw=0" in graph
+    assert "text_align=center" in graph
     assert "fontcolor=0xFFFFFF" in graph
-    assert "bordercolor=0x000000" in graph
+    assert "bordercolor" not in graph
     assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
@@ -711,7 +715,9 @@ def test_talking_title_is_editorial_and_type_stays_white():
     assert "drawbox=" not in graph
     assert "box=1" not in graph
     assert "fontcolor=0xFFFFFF" in graph
-    assert "bordercolor=0x000000" in graph
+    assert "borderw=0" in graph
+    assert "text_align=center" in graph
+    assert "bordercolor" not in graph
     assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
@@ -743,7 +749,47 @@ def test_talking_title_is_editorial_and_type_stays_white():
         brief, width=1920, height=1080, font_path="",
     )
     assert "&HFF000000" in script
-    assert ",1,3,0,5," in script
+    assert ",1,2,0,5," in script
+
+
+def test_captions_wrap_when_a_line_is_wider_than_the_frame():
+    from modules.club.captions import CaptionCue, render_ass, wrap_caption_text
+    short = wrap_caption_text("we play at four", 1080, 16)
+    assert short == "we play at four"
+    long = "one two three four five six seven eight nine ten"
+    wrapped = wrap_caption_text(long, 320, 16)
+    assert "\n" in wrapped
+    assert wrapped.replace("\n", " ") == long
+    assert all(len(line) < len(long) for line in wrapped.split("\n"))
+    brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\n")
+    script = render_ass(
+        [CaptionCue(1.0, 2.0, long)],
+        brief, width=320, height=1080, font_path="",
+    )
+    assert r"\N" in script
+
+
+def test_title_uses_a_bold_file_when_one_is_installed(tmp_path):
+    from modules.club.brand import bold_font, brand_filter
+    from modules.club.captions import talking_windows
+    regular = tmp_path / "Inter-Regular.otf"
+    bold = tmp_path / "Inter-Bold.otf"
+    regular.write_bytes(b"r")
+    bold.write_bytes(b"b")
+    assert bold_font(str(regular)) == str(bold.resolve())
+    brief = parse_brief(
+        "LENGTH: 12s\nSTYLE: talking\nTITLE: Private lesson\nCTA: Book\n"
+    )
+    windows = talking_windows(12)
+    graph = brand_filter(
+        brief, 12, str(regular), 1080, 1920,
+        windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
+        centered=True,
+    )
+    assert "Inter-Bold.otf" in graph
+    assert "borderw=0" in graph
+    assert "text_align=center" in graph
+    assert "(w-tw)/2" in graph
 
 
 def test_caption_defaults_are_center_four_words_and_larger_type():
@@ -751,8 +797,9 @@ def test_caption_defaults_are_center_four_words_and_larger_type():
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
     assert brief.caption_position == "center"
     assert brief.caption_size == 0
-    assert caption_style(brief, 720)["size"] >= 64
-    assert caption_style(brief, 1080)["size"] >= 64
+    assert caption_style(brief, 720)["size"] == 16
+    assert caption_style(brief, 1080)["size"] == 16
+    assert caption_style(brief, 1920)["size"] == 22
     assert caption_style(brief, 1080)["position"] == "center"
     middle = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: middle\n")
     assert middle.caption_position == "center"

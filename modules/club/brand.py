@@ -142,11 +142,10 @@ def brand_filter(
     from modules.media.transitions import _escape_path, _escape_text
 
     windows = windows if windows is not None else plate_windows(duration)
-    # Talking type is white with a black stroke and no filled box.
-    # Brief COLORS still paint a hype card; they do not recolor this path.
-    stroke = ""
+    # Talking title and CTA are white with no stroke. Captions keep their
+    # own black outline. Brief COLORS still paint a hype card.
     if centered:
-        ink, stroke = talking_type_colors()
+        ink, _stroke = talking_type_colors()
         bar = ""
     else:
         bar, ink = brand_colors(brief.colors)
@@ -174,21 +173,19 @@ def brand_filter(
             f":{_enable(start, end)}"
         )
 
+    # Talking title and CTA: bold white, no stroke, centered on the picture.
+    title_font = _escape_path(bold_font(font_path) if centered else font_path)
+
     def words(text: str, size: int, x: str, y: str, start: float, end: float, *,
-              outlined: bool = False) -> None:
-        # ``box=0`` keeps drawtext from painting its own background. The
-        # border is a stroke. A two-pixel shadow is the same ink, offset,
-        # not a bar behind the line.
-        outline = ""
-        if outlined and stroke:
-            outline = (
-                f":box=0:borderw={max(3, size // 10)}:bordercolor=0x{stroke}"
-                f":shadowcolor=0x{stroke}:shadowx=2:shadowy=2"
-            )
+              clean: bool = False) -> None:
+        # ``box=0`` and ``borderw=0`` keep a filled plate and a stroke off
+        # the talking title. ``text_align=center`` centers each line.
+        face = title_font if clean else font
+        extra = ":box=0:borderw=0:text_align=center" if clean else ""
         parts.append(
-            f"drawtext=fontfile='{font}':text='{_escape_text(text)}'"
+            f"drawtext=fontfile='{face}':text='{_escape_text(text)}'"
             f":fontcolor=0x{ink}:fontsize={size}:x={x}:y={y}"
-            f":line_spacing={max(4, size // 6)}{outline}:{_enable(start, end)}"
+            f":line_spacing={max(4, size // 6)}{extra}:{_enable(start, end)}"
         )
 
     def centered_block(primary: str, primary_size: int, secondary: str,
@@ -196,12 +193,12 @@ def brand_filter(
         if primary and secondary:
             gap = max(8, primary_size // 6)
             block = primary_size + gap + secondary_size
-            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end, outlined=True)
+            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end, clean=True)
             words(secondary, secondary_size, "(w-tw)/2",
-                  f"(h-{block})/2+{primary_size + gap}", start, end, outlined=True)
+                  f"(h-{block})/2+{primary_size + gap}", start, end, clean=True)
         else:
             words(primary or secondary, primary_size or secondary_size,
-                  "(w-tw)/2", "(h-th)/2", start, end, outlined=True)
+                  "(w-tw)/2", "(h-th)/2", start, end, clean=True)
 
     title_on, title_off = windows["title"]
     if title_off > title_on and (title_text or sub_text):
@@ -276,6 +273,13 @@ _FONT_FILES = {
     ),
 }
 
+_BOLD_FILES = (
+    "Inter-Bold.otf",
+    "Inter-Bold.ttf",
+    "InterBold.otf",
+    "InterBold.ttf",
+)
+
 
 def font_for_brand(brand: str) -> str:
     """Default face when ``FONT`` is left blank.
@@ -321,6 +325,59 @@ def _file_for_name(name: str, directories) -> str:
             if candidate.is_file():
                 return str(candidate.resolve())
     return ""
+
+
+def bold_font(path: str) -> str:
+    """A bold file for ``path``, or ``path`` when none is installed.
+
+    Title and the call to action use this. Captions stay on the regular face.
+    """
+    if not path:
+        return path
+    source = Path(path)
+    names: list[str] = []
+    if "Regular" in source.stem:
+        names.append(source.stem.replace("Regular", "Bold") + source.suffix)
+    names.extend(_BOLD_FILES)
+    folders = [source.parent, *club_font_dirs()]
+    seen: set[str] = set()
+    for folder in folders:
+        for name in names:
+            candidate = Path(folder) / name
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate.is_file():
+                return str(candidate.resolve())
+    found = _fontconfig_style("Inter", "Bold")
+    if found:
+        return found
+    return path
+
+
+def _fontconfig_style(family: str, style: str) -> str:
+    """A font file whose family and style match, or ``""``."""
+    if not family or shutil.which("fc-match") is None:
+        return ""
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{family}|%{style}|%{file}", f"{family}:style={style}"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    parts = (result.stdout or "").strip().split("|")
+    if result.returncode != 0 or len(parts) != 3:
+        return ""
+    got_family, got_style, file = parts
+    if not os.path.isfile(file):
+        return ""
+    if family.casefold() not in got_family.casefold():
+        return ""
+    if style.casefold() not in got_style.casefold():
+        return ""
+    return file
 
 
 def _lookup_font(spec: str, directories) -> str:

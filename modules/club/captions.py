@@ -4,8 +4,10 @@ The words on screen during the body are the transcript of the assembled
 cut. Nothing in the brief is turned into a caption, and no spoken line is
 copied up into ``TITLE``. The title is the brief's editorial line (who
 and what the video is). ``CTA`` is optional and covers the close when set.
-The middle is whatever was said. Title, captions, and CTA are white or
-black. Brief ``COLORS`` do not tint them.
+The middle is whatever was said. The title and the call to action are
+bold white with no stroke. Captions are white with a black stroke, about
+16pt, and wrap when a line is wider than the frame. Brief ``COLORS`` do
+not tint them.
 
 Local Whisper only. ``faster-whisper`` is used when it is installed;
 otherwise the ``openai-whisper`` package already required by the app.
@@ -27,14 +29,15 @@ from modules.club.brand import brand_filter, neutral_ink, resolve_font, type_fon
 # Opening and closing plates. The user asked for roughly the first 2–3 seconds.
 TALKING_PLATE_S = 2.5
 
-# A caption line is about four spoken words. The character cap is only a
-# backstop for one very long token; it is not what sets the line length.
+# A caption line is a short phrase. A line that would run past the frame
+# wraps instead. The character cap is only a backstop.
 CAPTION_WORDS = 4
 CAPTION_CHARS = 42
 
-# Omitted CAPTION_SIZE scales with the frame and stays above the old 42pt.
-CAPTION_SIZE_FLOOR = 64
-CAPTION_SIZE_FRACTION = 0.064
+# About 16pt on a 1080-tall frame. A taller frame grows a little and then
+# stops, so captions stay caption-sized and do not catch the title.
+CAPTION_SIZE_AT_1080 = 16
+CAPTION_SIZE_CAP = 22
 
 
 @dataclass(frozen=True)
@@ -242,6 +245,41 @@ def _alignment(position: str) -> int:
     return 5
 
 
+def default_caption_size(height: int) -> int:
+    """Point size when ``CAPTION_SIZE`` is omitted.
+
+    16 at 1080px tall. Taller frames scale up only as far as
+    ``CAPTION_SIZE_CAP``.
+    """
+    scaled = int(round(CAPTION_SIZE_AT_1080 * max(int(height), 1) / 1080))
+    return max(CAPTION_SIZE_AT_1080, min(CAPTION_SIZE_CAP, scaled))
+
+
+def wrap_caption_text(text: str, frame_width: int, font_size: int) -> str:
+    """Soft-wrap ``text`` so a line fits ``frame_width``.
+
+    Words stay in order. A short phrase that already fits is one line.
+    """
+    words = str(text or "").split()
+    if not words:
+        return ""
+    usable = max(40, int(max(frame_width, 1) * 0.82))
+    char_px = max(1.0, float(font_size) * 0.55)
+    max_chars = max(8, int(usable / char_px))
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        candidate = " ".join(current + [word])
+        if current and (len(candidate) > max_chars or len(candidate) * char_px > usable):
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return "\n".join(lines)
+
+
 def caption_style(brief: Brief, height: int) -> dict:
     """Resolved caption look. Type is white or black, with the other as the stroke.
 
@@ -258,10 +296,8 @@ def caption_style(brief: Brief, height: int) -> dict:
         stroke_ink = "000000" if ink == "FFFFFF" else "FFFFFF"
     color = f"#{ink}"
     stroke = f"#{stroke_ink}"
-    width = brief.caption_stroke_width or 3
-    size = brief.caption_size or max(
-        CAPTION_SIZE_FLOOR, int(height * CAPTION_SIZE_FRACTION),
-    )
+    size = brief.caption_size or default_caption_size(height)
+    width = brief.caption_stroke_width or max(1, min(3, size // 8))
     return {
         "color": color,
         "stroke": stroke,
@@ -337,10 +373,11 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
     ])
     lines = [header]
     for cue in cues:
+        wrapped = wrap_caption_text(cue.text, int(width), int(style["size"]))
         lines.append(
             "Dialogue: 0,"
             f"{ass_timestamp(cue.start)},{ass_timestamp(cue.end)},"
-            f"Caption,,0,0,0,,{_ass_text(cue.text)}"
+            f"Caption,,0,0,0,,{_ass_text(wrapped)}"
         )
     return "\n".join(lines) + "\n"
 
