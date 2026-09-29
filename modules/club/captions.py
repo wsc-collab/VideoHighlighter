@@ -1,9 +1,11 @@
 """Burn a talking pack: title, speech captions, call to action.
 
 The words on screen during the body are the transcript of the assembled
-cut. Nothing in the brief is turned into a caption. ``TITLE`` covers the
-opening (about two and a half seconds) and ``CTA`` covers the close. The
-middle is whatever was said.
+cut. Nothing in the brief is turned into a caption, and no spoken line is
+copied up into ``TITLE``. The title is the brief's editorial line (who
+and what the video is). ``CTA`` is optional and covers the close when set.
+The middle is whatever was said. Title, captions, and CTA are white or
+black. Brief ``COLORS`` do not tint them.
 
 Local Whisper only. ``faster-whisper`` is used when it is installed;
 otherwise the ``openai-whisper`` package already required by the app.
@@ -19,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 
 from modules.club.brief import Brief
-from modules.club.brand import brand_colors, brand_filter, resolve_font
+from modules.club.brand import brand_filter, neutral_ink, resolve_font
 
 
 # Opening and closing plates. The user asked for roughly the first 2–3 seconds.
@@ -241,10 +243,21 @@ def _alignment(position: str) -> int:
 
 
 def caption_style(brief: Brief, height: int) -> dict:
-    """Resolved caption look. Defaults stay readable when the brief is quiet."""
-    _bar, ink = brand_colors(brief.colors)
-    color = brief.caption_color or f"#{ink}"
-    stroke = brief.caption_stroke or "#000000"
+    """Resolved caption look. Type is white or black, with the other as the stroke.
+
+    ``COLORS`` does not tint captions. A cream or orange ``CAPTION_COLOR``
+    is drawn as white. A dark request is drawn as black, and the stroke
+    flips so the line stays readable.
+    """
+    ink = neutral_ink(brief.caption_color or "FFFFFF")
+    if brief.caption_stroke:
+        stroke_ink = neutral_ink(brief.caption_stroke)
+    else:
+        stroke_ink = "000000" if ink == "FFFFFF" else "FFFFFF"
+    if stroke_ink == ink:
+        stroke_ink = "000000" if ink == "FFFFFF" else "FFFFFF"
+    color = f"#{ink}"
+    stroke = f"#{stroke_ink}"
     width = brief.caption_stroke_width or 3
     size = brief.caption_size or max(
         CAPTION_SIZE_FLOOR, int(height * CAPTION_SIZE_FRACTION),

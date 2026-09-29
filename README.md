@@ -109,8 +109,9 @@ Portable builds, GPU setup, where it writes, and fixing an oversized UI:
 ## Club montages
 
 This fork's club path is a talking pack: a folder of real clips and a
-`brief.md` (`LENGTH`, `STYLE: talking`, `TITLE`, `CTA`, optional caption
-color, stroke, size, and position). It ranks windows with local Whisper,
+`brief.md` (`LENGTH`, `STYLE: talking`, a who/what `TITLE`, optional
+`CTA`). Title, captions, and the call to action are white or black on a
+neutral plate. It ranks windows with local Whisper,
 audio peaks, and motion, joins a straight cut, then burns a title for the
 opening seconds, captions of what was said, and a call to action at the
 end. Caption words come from the speech. Silent hype montages stay in

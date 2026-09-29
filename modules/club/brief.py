@@ -7,16 +7,22 @@ The file is a short operator note, not a detector preset. Required fields:
     KEYWORDS: ace, rally
     NOTES: Prefer the last shot of each point.
 
-``STYLE: talking`` is the club pack: a title for the opening seconds,
-burned-in captions of what is said, and a call to action at the end.
-Caption words come from the recording. They are not written in the brief.
+``STYLE: talking`` is the club pack: an editorial title for the opening
+seconds, burned-in captions of what is said, and an optional call to
+action at the end. ``TITLE`` names who is on camera and what the video
+is (``Private lesson with Coach John Wang``). It is not a line from the
+transcript. Caption words come from the recording. They are not written
+in the brief, and they are not copied up into the title.
 
-    TITLE: Match day
-    CTA: See you Saturday
+    TITLE: Private lesson with Coach John Wang
     FONT: DejaVu Sans
-    COLORS: #1B4D3E, #F4E8C1
-    CAPTION_COLOR: #FFFFFF
-    CAPTION_STROKE: #000000 3
+    KEYWORDS: lesson, finish
+    NOTES: Prefer windows where the coach is speaking.
+
+Leave ``CTA`` out for no end card. A soft line such as ``CTA: Book a
+lesson`` is optional. Leave ``COLORS`` out on a talking brief. The plate
+is neutral dark and the type is white either way. ``COLORS`` still paints
+a hype card, not this pack.
 
 Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
 defaults: captions in the center of the frame, about four words a line,
@@ -167,7 +173,7 @@ def parse_colors(text: str) -> tuple[str, ...]:
         if not match:
             raise BriefError(
                 f"COLORS entry {part!r} is not a hex color. "
-                "Example: COLORS: #1B4D3E, #F4E8C1"
+                "Example: COLORS: #112233, #FFFFFF"
             )
         hexes = match.group(1)
         if len(hexes) == 3:

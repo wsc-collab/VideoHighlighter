@@ -25,17 +25,31 @@ Put `brief.md` in the clips folder. Length and style are required. The
 type fields are optional: leave them out and the run stays a highlights cut.
 
 ```text
-LENGTH: 20-35s
+LENGTH: 20s
 STYLE: talking
-TITLE: Match day
-CTA: See you Saturday
+TITLE: Private lesson with Coach John Wang
 FONT: DejaVu Sans
-COLORS: #1B4D3E, #F4E8C1
-CAPTION_COLOR: #FFFFFF
-CAPTION_STROKE: #000000 3
-KEYWORDS: lesson, clinic
-NOTES: Keep the coach's answer. Do not write caption copy here.
+KEYWORDS: lesson, finish
+NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.
 ```
+
+`TITLE` is who is on camera and what the video is. It is not a coaching
+cue from the transcript (`Hold your finish` belongs in the captions, not
+on the opening plate). `KEYWORDS` and `NOTES` still steer which windows
+are kept. They are not drawn on screen.
+
+Leave `CTA` out when there is no end card. A soft line is optional:
+
+```text
+CTA: Book a lesson
+```
+
+Leave `COLORS` out. On a talking pack the title and call-to-action plates
+are neutral dark with white type, and captions are white with a black
+stroke. A `COLORS` line does not fill the plate and does not recolor the
+words, so an older brief that still says `#1B4D3E, #F4E8C1` will not come
+back as a green card with orange type. `COLORS` still paints a `hype`
+highlights card.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
 in the center, about four words a line, at a size that follows the frame
@@ -54,13 +68,13 @@ CAPTION_POSITION: bottom
 | `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
-| `TITLE` | no | Opening title, about the first 2–3 seconds. Centered on a solid plate. |
-| `SUBTITLE` | no | Optional second line on that same centered plate. |
-| `COLORS` | no | Hex colors. The first is the solid title/CTA plate, the second is that type. |
+| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Centered, white, on a neutral dark plate. Not a line from the transcript. |
+| `SUBTITLE` | no | Optional second line on that same plate. Same white type. |
+| `COLORS` | no | Ignored for talking type and plates. On `hype`, the first hex is the bar and the second is the type. |
 | `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
-| `CTA` | no | End card, about the last 2–3 seconds. Centered on a solid plate. |
-| `CAPTION_COLOR` | no | Caption fill. Default is white, or the second `COLORS` value when that is set. |
-| `CAPTION_STROKE` | no | Outline color and optional width, e.g. `#000000 3`. Default is black, 3. |
+| `CTA` | no | Optional end card, about the last 2–3 seconds. Same neutral plate and white type. Leave it out for no end card. |
+| `CAPTION_COLOR` | no | Drawn as white or black. Default is white. A cream or orange value is drawn as white. |
+| `CAPTION_STROKE` | no | Outline. Default is black behind white type, or white behind black type. Width example: `#000000 3`. |
 | `CAPTION_SIZE` | no | Caption point size. Default follows the frame height and is at least 64. |
 | `CAPTION_POSITION` | no | `center` (default), `bottom`, or `top`. `middle` is the same as `center`. |
 | `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
@@ -81,9 +95,11 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
 `draft.mp4`:
 
 - **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
-  seconds. The type is centered on both axes over a solid plate (fully
-  opaque, not a translucent wash). On a cut under about eight seconds the
-  plate shrinks so it cannot cover the captions.
+  seconds. The words are the brief, not a sentence Whisper heard. The
+  type is centered on both axes, white, on a solid neutral-dark plate
+  (fully opaque, not a translucent wash, and not a `COLORS` fill). On a
+  cut under about eight seconds the plate shrinks so it cannot cover
+  the captions.
 - **Captions** for speech whose middle falls between the title and the
   call to action. Default position is the center of the frame, about four
   words a line, at least 64pt (larger on a 1080 frame). The engine is
@@ -91,8 +107,8 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   otherwise `openai-whisper` from `requirements.txt`. No caption is sent
   to a paid API. `--no-whisper` leaves the captions off and does not
   invent lines to fill them.
-- **Call to action** from `CTA` for about the last 2.5 seconds, on the
-  same kind of centered solid plate as the title.
+- **Call to action** from `CTA`, only when that line is set, for about
+  the last 2.5 seconds, on the same centered neutral plate with white type.
 
 `cuts.json` lists every burned line under `captions.cues` with start, end,
 and text, so you can check the words against the recording. A failed burn
@@ -173,22 +189,24 @@ one folder with this `brief.md`. Do not copy `CAPTION_SIZE` or
 ```text
 LENGTH: 30s
 STYLE: talking
-TITLE: Match day
-CTA: See you Saturday
+TITLE: Private lesson with Coach John Wang
 FONT: DejaVu Sans
-COLORS: #1B4D3E, #F4E8C1
 KEYWORDS: lesson, clinic
-NOTES: Keep the coach's answer. Do not write caption copy here.
+NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.
 ```
+
+Do not copy `COLORS`, `CAPTION_POSITION: bottom`, or `CAPTION_SIZE: 42`
+from an older draft. Title and captions stay white. The plate stays
+neutral dark. Add `CTA:` only when an end line is wanted.
 
 ```bash
 python -m modules.club "/path/to/lisa-clips"
 ```
 
-On `draft.mp4`: the title and the call to action are centered on a solid
-plate (the picture does not show through the bar). Captions sit in the
-center of the frame, about four words a line, larger than 42pt. The words
-are still the Whisper cues. `cuts.json` lists them under `captions.cues`.
+On `draft.mp4`: the title is the who/what line, centered in white on a
+solid neutral-dark plate. Captions sit in the center of the frame, white,
+about four words a line, larger than 42pt. Those words are the Whisper
+cues, not the title. `cuts.json` lists them under `captions.cues`.
 
 If the folder also has a quiet phone zoom of a mic'd take, check
 `mic_preference` in `cuts.json`. A file 12 dB or more under the loudest

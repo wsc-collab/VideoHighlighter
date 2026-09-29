@@ -345,7 +345,10 @@ def test_talking_title_and_cta_sit_on_a_centered_opaque_plate():
         centered=True,
     )
     assert "@0.78" not in graph
-    assert "0x1B4D3E@1" in graph
+    assert "0x111111@1" in graph
+    assert "0xFFFFFF" in graph
+    assert "0x1B4D3E" not in graph
+    assert "0xF4E8C1" not in graph
     assert "(iw-iw*0.72)/2" in graph
     assert "(ih-ih*0.28)/2" in graph
     assert "(w-tw)/2" in graph
@@ -605,13 +608,18 @@ def test_thirty_second_talking_brief_uses_centered_solid_type():
     assert brief.caption_size == 0
     assert caption_style(brief, 1080)["size"] >= 64
     assert caption_style(brief, 1080)["position"] == "center"
+    assert caption_style(brief, 1080)["color"] == "#FFFFFF"
+    assert caption_style(brief, 1080)["stroke"] == "#000000"
     windows = talking_windows(30)
     graph = brand_filter(
         brief, 30, "/tmp/Club.ttf", 1920, 1080,
         windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
         centered=True,
     )
-    assert "0x1B4D3E@1" in graph
+    assert "0x111111@1" in graph
+    assert "0xFFFFFF" in graph
+    assert "0x1B4D3E" not in graph
+    assert "0xF4E8C1" not in graph
     assert "@0.78" not in graph
     assert "(w-tw)/2" in graph
     assert "(h-th)/2" in graph
@@ -632,6 +640,56 @@ def test_thirty_second_talking_brief_uses_centered_solid_type():
         body_end=windows["captions"][1],
     )
     assert [cue.text for cue in cues] == ["we play at four", "on saturday"]
+
+
+def test_talking_title_is_editorial_and_type_stays_white():
+    from modules.club.brand import brand_filter, neutral_ink
+    from modules.club.captions import caption_cues, caption_style, talking_windows
+    brief = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+        "KEYWORDS: finish, lesson\n"
+        "NOTES: Prefer the finish cue.\n"
+        "COLORS: #1B4D3E, #F4E8C1\n"
+        "CAPTION_COLOR: #F4E8C1\n"
+    )
+    assert brief.title == "Private lesson with Coach John Wang"
+    assert brief.cta == ""
+    windows = talking_windows(20)
+    graph = brand_filter(
+        brief, 20, "/tmp/Club.ttf", 1920, 1080,
+        windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
+        centered=True,
+    )
+    assert "Private lesson with Coach John Wang" in graph
+    assert "Hold your finish" not in graph
+    assert "0x111111@1" in graph
+    assert "fontcolor=0xFFFFFF" in graph
+    assert "0x1B4D3E" not in graph
+    assert "0xF4E8C1" not in graph
+    assert neutral_ink("#F4E8C1") == "FFFFFF"
+    assert neutral_ink("#1B4D3E") == "000000"
+    style = caption_style(brief, 1080)
+    assert style["color"] == "#FFFFFF"
+    assert style["stroke"] == "#000000"
+    cues = caption_cues(
+        [{
+            "start": 4.0,
+            "end": 6.0,
+            "text": "Hold your finish",
+            "words": [
+                {"start": 4.0, "end": 4.4, "word": "Hold"},
+                {"start": 4.4, "end": 4.8, "word": "your"},
+                {"start": 4.8, "end": 5.4, "word": "finish"},
+            ],
+        }],
+        body_start=windows["captions"][0],
+        body_end=windows["captions"][1],
+    )
+    assert [cue.text for cue in cues] == ["Hold your finish"]
+    black = parse_brief("LENGTH: 20s\nSTYLE: talking\nCAPTION_COLOR: #000000\n")
+    assert caption_style(black, 1080)["color"] == "#000000"
+    assert caption_style(black, 1080)["stroke"] == "#FFFFFF"
 
 
 def test_caption_defaults_are_center_four_words_and_larger_type():

@@ -64,11 +64,14 @@ def _luminance(rrggbb: str) -> float:
 
 
 def brand_colors(colors: tuple[str, ...]) -> tuple[str, str]:
-    """``(bar, type)`` as ``RRGGBB``.
+    """``(bar, type)`` as ``RRGGBB`` for a hype highlights card.
 
     The first brief color is the bar. The second is the type. One color
     keeps that bar and picks black or white type so the words stay readable.
     No colors means a dark bar and white type.
+
+    Talking packs do not use this pair. A dark-green plate with a cream
+    or orange word was the wrong card. See ``talking_plate_colors``.
     """
     if not colors:
         return "111111", "FFFFFF"
@@ -78,6 +81,29 @@ def brand_colors(colors: tuple[str, ...]) -> tuple[str, str]:
     else:
         ink = "111111" if _luminance(bar) > 0.55 else "FFFFFF"
     return bar, ink
+
+
+def neutral_ink(hex_color: str) -> str:
+    """``FFFFFF`` or ``000000``.
+
+    A light request, including a cream or orange accent, becomes white.
+    A dark request becomes black. Talking type stays on one of those two.
+    """
+    raw = (hex_color or "").lstrip("#").upper()
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) != 6:
+        return "FFFFFF"
+    return "000000" if _luminance(raw) < 0.5 else "FFFFFF"
+
+
+def talking_plate_colors() -> tuple[str, str]:
+    """``(plate, type)`` for a talking title or call to action.
+
+    Always a neutral dark plate and white type. ``COLORS`` in the brief
+    does not fill the plate and does not recolor the words.
+    """
+    return "111111", "FFFFFF"
 
 
 def _enable(start: float, end: float) -> str:
@@ -117,7 +143,9 @@ def brand_filter(
     from modules.media.transitions import _escape_path, _escape_text
 
     windows = windows if windows is not None else plate_windows(duration)
-    bar, ink = brand_colors(brief.colors)
+    # Talking title and CTA stay white on a neutral plate. Brief COLORS
+    # still paint a hype card; they do not recolor this path.
+    bar, ink = talking_plate_colors() if centered else brand_colors(brief.colors)
     font = _escape_path(font_path) if font_path else ""
     if not font:
         return ""
