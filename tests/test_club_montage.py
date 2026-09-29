@@ -330,7 +330,7 @@ def test_brand_filter_draws_type_on_the_cut_and_skips_a_plain_brief():
     assert "@0.78" in graph
 
 
-def test_talking_title_and_cta_sit_on_a_centered_opaque_plate():
+def test_talking_title_and_cta_sit_on_the_picture():
     from modules.club.brand import brand_filter
     from modules.club.captions import talking_windows
     brief = parse_brief(
@@ -344,13 +344,17 @@ def test_talking_title_and_cta_sit_on_a_centered_opaque_plate():
         windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
         centered=True,
     )
-    assert "@0.78" not in graph
-    assert "0x111111@1" in graph
-    assert "0xFFFFFF" in graph
+    assert "drawbox=" not in graph
+    assert "box=1" not in graph
+    assert "box=0" in graph
+    assert "fontcolor=0xFFFFFF" in graph
+    assert "bordercolor=0x000000" in graph
+    assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
-    assert "(iw-iw*0.72)/2" in graph
-    assert "(ih-ih*0.28)/2" in graph
+    assert "@0.78" not in graph
+    assert "(iw-iw*0.72)/2" not in graph
+    assert "(ih-ih*0.28)/2" not in graph
     assert "(w-tw)/2" in graph
     assert "(h-th)/2" in graph
     assert "ih*0.30" not in graph
@@ -593,8 +597,8 @@ def test_talking_without_whisper_does_not_invent_captions(tmp_path):
     assert (tmp_path / "draft.mp4").read_bytes() == b"title-only"
 
 
-def test_thirty_second_talking_brief_uses_centered_solid_type():
-    """The Lisa re-run: LENGTH 30s, no caption size or position in the brief."""
+def test_thirty_second_talking_brief_uses_type_on_the_picture():
+    """LENGTH 30s, no caption size or position, and no plate behind the type."""
     from modules.club.brand import brand_filter
     from modules.club.captions import caption_cues, caption_style, talking_windows
     brief = parse_brief(
@@ -616,8 +620,12 @@ def test_thirty_second_talking_brief_uses_centered_solid_type():
         windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
         centered=True,
     )
-    assert "0x111111@1" in graph
-    assert "0xFFFFFF" in graph
+    assert "drawbox=" not in graph
+    assert "box=1" not in graph
+    assert "box=0" in graph
+    assert "fontcolor=0xFFFFFF" in graph
+    assert "bordercolor=0x000000" in graph
+    assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
     assert "@0.78" not in graph
@@ -644,7 +652,7 @@ def test_thirty_second_talking_brief_uses_centered_solid_type():
 
 def test_talking_title_is_editorial_and_type_stays_white():
     from modules.club.brand import brand_filter, neutral_ink
-    from modules.club.captions import caption_cues, caption_style, talking_windows
+    from modules.club.captions import CaptionCue, caption_cues, caption_style, render_ass, talking_windows
     brief = parse_brief(
         "LENGTH: 20s\nSTYLE: talking\n"
         "TITLE: Private lesson with Coach John Wang\n"
@@ -663,8 +671,11 @@ def test_talking_title_is_editorial_and_type_stays_white():
     )
     assert "Private lesson with Coach John Wang" in graph
     assert "Hold your finish" not in graph
-    assert "0x111111@1" in graph
+    assert "drawbox=" not in graph
+    assert "box=1" not in graph
     assert "fontcolor=0xFFFFFF" in graph
+    assert "bordercolor=0x000000" in graph
+    assert "0x111111" not in graph
     assert "0x1B4D3E" not in graph
     assert "0xF4E8C1" not in graph
     assert neutral_ink("#F4E8C1") == "FFFFFF"
@@ -690,6 +701,12 @@ def test_talking_title_is_editorial_and_type_stays_white():
     black = parse_brief("LENGTH: 20s\nSTYLE: talking\nCAPTION_COLOR: #000000\n")
     assert caption_style(black, 1080)["color"] == "#000000"
     assert caption_style(black, 1080)["stroke"] == "#FFFFFF"
+    script = render_ass(
+        [CaptionCue(4.0, 5.4, "Hold your finish")],
+        brief, width=1920, height=1080, font_path="",
+    )
+    assert "&HFF000000" in script
+    assert ",1,3,0,5," in script
 
 
 def test_caption_defaults_are_center_four_words_and_larger_type():

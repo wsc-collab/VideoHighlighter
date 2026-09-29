@@ -70,8 +70,7 @@ def brand_colors(colors: tuple[str, ...]) -> tuple[str, str]:
     keeps that bar and picks black or white type so the words stay readable.
     No colors means a dark bar and white type.
 
-    Talking packs do not use this pair. A dark-green plate with a cream
-    or orange word was the wrong card. See ``talking_plate_colors``.
+    Talking packs do not use this pair. See ``talking_type_colors``.
     """
     if not colors:
         return "111111", "FFFFFF"
@@ -97,13 +96,13 @@ def neutral_ink(hex_color: str) -> str:
     return "000000" if _luminance(raw) < 0.5 else "FFFFFF"
 
 
-def talking_plate_colors() -> tuple[str, str]:
-    """``(plate, type)`` for a talking title or call to action.
+def talking_type_colors() -> tuple[str, str]:
+    """``(type, stroke)`` as ``RRGGBB`` for a talking title or call to action.
 
-    Always a neutral dark plate and white type. ``COLORS`` in the brief
-    does not fill the plate and does not recolor the words.
+    White words with a black stroke, drawn on the picture. No plate, no
+    filled box, and ``COLORS`` does not recolor the words.
     """
-    return "111111", "FFFFFF"
+    return "FFFFFF", "000000"
 
 
 def _enable(start: float, end: float) -> str:
@@ -134,18 +133,23 @@ def brand_filter(
     ``windows`` overrides the default title / lower-third / end timing.
     A talking pack passes windows whose lower third is empty so captions
     own the middle of the cut, and ``centered=True`` so the title and the
-    call to action sit in the middle of the frame on a solid plate.
-    The hype path leaves ``centered`` off: those plates stay full-width
-    bands with a translucent fill.
+    call to action sit in the middle of the frame on the picture itself.
+    That path draws no box. The hype path leaves ``centered`` off: those
+    cards stay full-width bands with a translucent fill.
     """
     if not brief.wants_brand():
         return ""
     from modules.media.transitions import _escape_path, _escape_text
 
     windows = windows if windows is not None else plate_windows(duration)
-    # Talking title and CTA stay white on a neutral plate. Brief COLORS
-    # still paint a hype card; they do not recolor this path.
-    bar, ink = talking_plate_colors() if centered else brand_colors(brief.colors)
+    # Talking type is white with a black stroke and no filled box.
+    # Brief COLORS still paint a hype card; they do not recolor this path.
+    stroke = ""
+    if centered:
+        ink, stroke = talking_type_colors()
+        bar = ""
+    else:
+        bar, ink = brand_colors(brief.colors)
     font = _escape_path(font_path) if font_path else ""
     if not font:
         return ""
@@ -170,32 +174,34 @@ def brand_filter(
             f":{_enable(start, end)}"
         )
 
-    def words(text: str, size: int, x: str, y: str, start: float, end: float) -> None:
+    def words(text: str, size: int, x: str, y: str, start: float, end: float, *,
+              outlined: bool = False) -> None:
+        # ``box=0`` keeps drawtext from painting its own background. The
+        # border is a stroke. A two-pixel shadow is the same ink, offset,
+        # not a bar behind the line.
+        outline = ""
+        if outlined and stroke:
+            outline = (
+                f":box=0:borderw={max(3, size // 10)}:bordercolor=0x{stroke}"
+                f":shadowcolor=0x{stroke}:shadowx=2:shadowy=2"
+            )
         parts.append(
             f"drawtext=fontfile='{font}':text='{_escape_text(text)}'"
             f":fontcolor=0x{ink}:fontsize={size}:x={x}:y={y}"
-            f":line_spacing={max(4, size // 6)}:{_enable(start, end)}"
+            f":line_spacing={max(4, size // 6)}{outline}:{_enable(start, end)}"
         )
-
-    # Talking title and CTA: a plate in the middle of the picture, both
-    # axes, filled solid. ``@1`` is opaque. The old ``@0.78`` read as a wash.
-    plate_x = "(iw-iw*0.72)/2"
-    plate_y = "(ih-ih*0.28)/2"
-    plate_w = "iw*0.72"
-    plate_h = "ih*0.28"
 
     def centered_block(primary: str, primary_size: int, secondary: str,
                        secondary_size: int, start: float, end: float) -> None:
-        box(plate_x, plate_y, plate_w, plate_h, start, end, opacity="1")
         if primary and secondary:
             gap = max(8, primary_size // 6)
             block = primary_size + gap + secondary_size
-            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end)
+            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end, outlined=True)
             words(secondary, secondary_size, "(w-tw)/2",
-                  f"(h-{block})/2+{primary_size + gap}", start, end)
+                  f"(h-{block})/2+{primary_size + gap}", start, end, outlined=True)
         else:
             words(primary or secondary, primary_size or secondary_size,
-                  "(w-tw)/2", "(h-th)/2", start, end)
+                  "(w-tw)/2", "(h-th)/2", start, end, outlined=True)
 
     title_on, title_off = windows["title"]
     if title_off > title_on and (title_text or sub_text):

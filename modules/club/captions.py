@@ -326,7 +326,7 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
         (
             f"Style: Caption,{face},{style['size']},"
             f"{_ass_color(style['color'])},{_ass_color(style['color'])},"
-            f"{_ass_color(style['stroke'])},&H64000000,"
+            f"{_ass_color(style['stroke'])},&HFF000000,"
             f"0,0,0,0,100,100,0,0,1,{style['stroke_width']},0,"
             f"{align},40,40,{margin_v},1"
         ),
@@ -461,9 +461,10 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
                        cues: list[CaptionCue], log_fn=print) -> str:
     """Draw the title, the spoken captions, and the call to action.
 
-    One ffmpeg pass. Captions go through an ASS script (libass). Title and
-    CTA sit in the middle of the frame on a solid plate. Raises when
-    ffmpeg fails; the caller keeps the unbranded cut.
+    One ffmpeg pass. Captions go through an ASS script (libass) with an
+    outline and no box. Title and CTA sit in the middle of the frame on
+    the picture, with a stroke and no filled plate. Raises when ffmpeg
+    fails; the caller keeps the unbranded cut.
     """
     from modules.system.app_paths import ffmpeg_exe
 

@@ -20,9 +20,9 @@ in the brief, and they are not copied up into the title.
     NOTES: Prefer windows where the coach is speaking.
 
 Leave ``CTA`` out for no end card. A soft line such as ``CTA: Book a
-lesson`` is optional. Leave ``COLORS`` out on a talking brief. The plate
-is neutral dark and the type is white either way. ``COLORS`` still paints
-a hype card, not this pack.
+lesson`` is optional. Leave ``COLORS`` out on a talking brief. Title,
+captions, and the call to action sit on the picture: white type, black
+stroke, no filled plate. ``COLORS`` still paints a hype card, not this pack.
 
 Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
 defaults: captions in the center of the frame, about four words a line,

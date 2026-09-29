@@ -35,7 +35,7 @@ NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as t
 
 `TITLE` is who is on camera and what the video is. It is not a coaching
 cue from the transcript (`Hold your finish` belongs in the captions, not
-on the opening plate). `KEYWORDS` and `NOTES` still steer which windows
+in the opening title). `KEYWORDS` and `NOTES` still steer which windows
 are kept. They are not drawn on screen.
 
 Leave `CTA` out when there is no end card. A soft line is optional:
@@ -44,12 +44,12 @@ Leave `CTA` out when there is no end card. A soft line is optional:
 CTA: Book a lesson
 ```
 
-Leave `COLORS` out. On a talking pack the title and call-to-action plates
-are neutral dark with white type, and captions are white with a black
-stroke. A `COLORS` line does not fill the plate and does not recolor the
+Leave `COLORS` out. On a talking pack the title, captions, and call to
+action sit on the picture: white type, black stroke, no box behind the
+words. A `COLORS` line does not paint a plate and does not recolor the
 words, so an older brief that still says `#1B4D3E, #F4E8C1` will not come
-back as a green card with orange type. `COLORS` still paints a `hype`
-highlights card.
+back as a green card or a dark bar with orange type. `COLORS` still
+paints a `hype` highlights card.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
 in the center, about four words a line, at a size that follows the frame
@@ -68,11 +68,11 @@ CAPTION_POSITION: bottom
 | `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
-| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Centered, white, on a neutral dark plate. Not a line from the transcript. |
-| `SUBTITLE` | no | Optional second line on that same plate. Same white type. |
-| `COLORS` | no | Ignored for talking type and plates. On `hype`, the first hex is the bar and the second is the type. |
+| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Centered white type on the picture, black stroke, no plate. Not a line from the transcript. |
+| `SUBTITLE` | no | Optional second line with the title. Same white type, no plate. |
+| `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
 | `FONT` | no | A `.ttf` / `.otf` path, or a font name installed on the machine. |
-| `CTA` | no | Optional end card, about the last 2–3 seconds. Same neutral plate and white type. Leave it out for no end card. |
+| `CTA` | no | Optional close, about the last 2–3 seconds. Same white type on the picture. Leave it out for no end line. |
 | `CAPTION_COLOR` | no | Drawn as white or black. Default is white. A cream or orange value is drawn as white. |
 | `CAPTION_STROKE` | no | Outline. Default is black behind white type, or white behind black type. Width example: `#000000 3`. |
 | `CAPTION_SIZE` | no | Caption point size. Default follows the frame height and is at least 64. |
@@ -96,19 +96,20 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
 
 - **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
   seconds. The words are the brief, not a sentence Whisper heard. The
-  type is centered on both axes, white, on a solid neutral-dark plate
-  (fully opaque, not a translucent wash, and not a `COLORS` fill). On a
-  cut under about eight seconds the plate shrinks so it cannot cover
-  the captions.
+  type is centered on both axes, white, with a black stroke. Nothing is
+  drawn behind it: no plate, no wash, no `COLORS` fill. On a cut under
+  about eight seconds that opening shrinks so it cannot cover the captions.
 - **Captions** for speech whose middle falls between the title and the
   call to action. Default position is the center of the frame, about four
-  words a line, at least 64pt (larger on a 1080 frame). The engine is
+  words a line, at least 64pt (larger on a 1080 frame), white with a
+  black stroke and no box behind the line. The engine is
   local Whisper: `faster-whisper` when that package is installed,
   otherwise `openai-whisper` from `requirements.txt`. No caption is sent
   to a paid API. `--no-whisper` leaves the captions off and does not
   invent lines to fill them.
 - **Call to action** from `CTA`, only when that line is set, for about
-  the last 2.5 seconds, on the same centered neutral plate with white type.
+  the last 2.5 seconds. Same centered white type and black stroke, on
+  the picture, with no plate.
 
 `cuts.json` lists every burned line under `captions.cues` with start, end,
 and text, so you can check the words against the recording. A failed burn
@@ -196,17 +197,18 @@ NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as t
 ```
 
 Do not copy `COLORS`, `CAPTION_POSITION: bottom`, or `CAPTION_SIZE: 42`
-from an older draft. Title and captions stay white. The plate stays
-neutral dark. Add `CTA:` only when an end line is wanted.
+from an older draft. Title and captions stay white on the picture, with
+a stroke and no plate behind them. Add `CTA:` only when an end line is wanted.
 
 ```bash
 python -m modules.club "/path/to/lisa-clips"
 ```
 
-On `draft.mp4`: the title is the who/what line, centered in white on a
-solid neutral-dark plate. Captions sit in the center of the frame, white,
-about four words a line, larger than 42pt. Those words are the Whisper
-cues, not the title. `cuts.json` lists them under `captions.cues`.
+On `draft.mp4`: the title is the who/what line, centered in white on the
+picture, with a black stroke and no bar behind it. Captions sit in the
+center of the frame, white, about four words a line, larger than 42pt,
+also with no box. Those words are the Whisper cues, not the title.
+`cuts.json` lists them under `captions.cues`.
 
 If the folder also has a quiet phone zoom of a mic'd take, check
 `mic_preference` in `cuts.json`. A file 12 dB or more under the loudest
