@@ -25,6 +25,15 @@ CLIP_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 # A one-word hit is widened to at least a second so it is watchable.
 QUOTE_PAD_S = 0.25
 QUOTE_MIN_S = 1.0
+# After "check your feet", "pause", or "hold", the picture has to stay up
+# long enough for the player to do it. Two seconds past the line.
+COACHING_BEAT_S = 2.0
+_COACHING_PATTERNS = (
+    ("check", "your", "feet"),
+    ("check", "feet"),
+    ("pause",),
+    ("hold",),
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +159,83 @@ def match_quote(moment: str, files: list[dict]) -> dict | None:
     return None
 
 
+def _segment_tokens(seg: dict) -> list[tuple[str, float, float]]:
+    """``(token, start, end)`` for one transcript segment."""
+    start = float(seg.get("start") or 0)
+    end = float(seg.get("end") or start)
+    words = list(seg.get("words") or [])
+    tokens: list[tuple[str, float, float]] = []
+    if words:
+        for word in words:
+            token_start = float(word.get("start") or start)
+            token_end = float(word.get("end") or end)
+            for piece in _tokens(str(word.get("text") or word.get("word") or "")):
+                tokens.append((piece, token_start, token_end))
+        return tokens
+    pieces = _tokens(str(seg.get("text") or ""))
+    if not pieces:
+        return []
+    span = max(0.01, end - start)
+    step = span / len(pieces)
+    for index, piece in enumerate(pieces):
+        tokens.append((piece, start + index * step, start + (index + 1) * step))
+    return tokens
+
+
+def coaching_cue_anchor(segments, start: float, end: float) -> float | None:
+    """End of the latest pause / hold / check-feet line that meets this window.
+
+    The anchor is the end of the spoken line, not the first cue word, when
+    the rest of that line follows within a couple of seconds. ``None`` when
+    the window does not contain one of those cues.
+    """
+    latest: float | None = None
+    lo, hi = float(start), float(end)
+    for seg in segments or []:
+        seg_end = float(seg.get("end") or seg.get("start") or 0)
+        tokens = _segment_tokens(seg)
+        if not tokens:
+            continue
+        for index in range(len(tokens)):
+            for pattern in _COACHING_PATTERNS:
+                width = len(pattern)
+                if index + width > len(tokens):
+                    continue
+                if tuple(tokens[index + offset][0] for offset in range(width)) != pattern:
+                    continue
+                match_start = tokens[index][1]
+                match_end = tokens[index + width - 1][2]
+                if match_end < lo - 0.05 or match_start > hi + 0.05:
+                    continue
+                anchor = match_end
+                if seg_end > anchor and seg_end - anchor <= COACHING_BEAT_S + 0.5:
+                    anchor = seg_end
+                latest = anchor if latest is None else max(latest, anchor)
+    return latest
+
+
+def extend_coaching_window(
+    start: float,
+    end: float,
+    duration: float | None,
+    segments,
+) -> tuple[float, float]:
+    """Push ``end`` out so a pause, hold, or foot-check is not cut off.
+
+    The extra time is two seconds after the line. A window that already
+    holds that long is left alone. The end stays inside the clip.
+    """
+    anchor = coaching_cue_anchor(segments, start, end)
+    if anchor is None:
+        return start, end
+    beat_end = anchor + COACHING_BEAT_S
+    if duration and duration > 0:
+        beat_end = min(float(duration), beat_end)
+    if beat_end <= end + 0.05:
+        return start, end
+    return start, beat_end
+
+
 def pad_quote(start: float, end: float, duration: float | None) -> tuple[float, float]:
     """Widen a matched line so the words are not cut off."""
     if end < start:
@@ -220,6 +306,14 @@ def resolve_includes(
             continue
         duration = durations.get(found["source"])
         start, end = pad_quote(float(found["start"]), float(found["end"]), duration)
+        file_segments = (by_name.get(found["source"]) or {}).get("segments") or []
+        held = extend_coaching_window(start, end, duration, file_segments)
+        if held[1] > end + 0.05:
+            log_fn(
+                f"Holding {found['source']} {start:.2f}-{held[1]:.2f}s "
+                "so the coaching beat after the cue can land."
+            )
+        start, end = held
         _keep(
             ForcedSpan(found["source"], found["path"], start, end, moment, "must_include"),
             {"kind": "must_include", "text": moment},
@@ -242,6 +336,14 @@ def resolve_includes(
         if duration and end > duration:
             log_fn(f"Clamping {name} to the end of the clip ({duration:.2f}s).")
             end = duration
+        file_segments = item.get("segments") or []
+        held = extend_coaching_window(start, end, duration, file_segments)
+        if held[1] > end + 0.05:
+            log_fn(
+                f"Holding {name} {start:.2f}-{held[1]:.2f}s "
+                "so the coaching beat after the cue can land."
+            )
+        start, end = held
         _keep(
             ForcedSpan(name, path, start, end, f"{name} {start:g}-{end:g}", "include_window"),
             {"kind": "include_window", "text": f"{name} {start:g}-{end:g}"},

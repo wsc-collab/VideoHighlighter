@@ -16,6 +16,7 @@ from modules.club.brief import BriefError, parse_brief
 from modules.club.montage import (
     ASSEMBLE_ONLY,
     Window,
+    is_silent_still,
     keyword_hits,
     list_clips,
     motion_from_frames,
@@ -1233,16 +1234,23 @@ def test_highlights_are_forced_and_the_ranker_fills_the_rest(tmp_path):
             {
                 "source": "lesson.mp4",
                 "duration_s": 30,
-                "segments": [{
-                    "start": 2.0,
-                    "end": 3.2,
-                    "text": "hold your finish",
-                    "words": [
-                        {"start": 2.0, "end": 2.4, "text": "hold"},
-                        {"start": 2.4, "end": 2.8, "text": "your"},
-                        {"start": 2.8, "end": 3.2, "text": "finish"},
-                    ],
-                }],
+                "segments": [
+                    {
+                        "start": 2.0,
+                        "end": 3.2,
+                        "text": "hold your finish",
+                        "words": [
+                            {"start": 2.0, "end": 2.4, "text": "hold"},
+                            {"start": 2.4, "end": 2.8, "text": "your"},
+                            {"start": 2.8, "end": 3.2, "text": "finish"},
+                        ],
+                    },
+                    {
+                        "start": 12.0,
+                        "end": 20.0,
+                        "text": "keep your head still and watch the ball",
+                    },
+                ],
             },
             {"source": "late.mp4", "duration_s": 30, "segments": []},
         ],
@@ -1282,6 +1290,10 @@ def test_highlights_are_forced_and_the_ranker_fills_the_rest(tmp_path):
     assert quote["start"] < 2.0 < 3.2 < quote["end"]
     assert "hold your finish" in quote["include"]
     assert cuts["assembled_seconds"] == pytest.approx(10, abs=0.2)
+    fillers = [row for row in cuts["cuts"] if not row.get("forced")]
+    assert fillers
+    assert all(row["speech"] >= 0.35 for row in fillers)
+    assert all(row["source"] != "late.mp4" for row in fillers)
     assert cuts["draft_written"] is True
     assert burned["title"] == "Private lesson"
     assert (tmp_path / "draft.mp4").read_bytes() == b"branded"
@@ -1335,7 +1347,15 @@ def test_a_highlight_in_a_quiet_clip_is_kept(tmp_path):
     (tmp_path / "transcript.json").write_text(json.dumps({
         "whisper": "base",
         "files": [
-            {"source": "lav.mp4", "duration_s": 20, "segments": []},
+            {
+                "source": "lav.mp4",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 0.0,
+                    "end": 8.0,
+                    "text": "keep your eye on the ball",
+                }],
+            },
             {
                 "source": "phone.mp4",
                 "duration_s": 20,
@@ -1448,8 +1468,9 @@ def test_talking_opens_on_a_must_include_not_a_silent_filler():
         forced=True, include="we play at four", kind="must_include",
     )
     ordered = playback_order([filler, later_must, first_must], "talking")
+    # The still ranks at the bottom, after both talking must-includes.
     assert [window.source for window in ordered] == [
-        "IMG_7230.MOV", "IMG_7227.MOV", "IMG_7244.MOV",
+        "IMG_7230.MOV", "IMG_7244.MOV", "IMG_7227.MOV",
     ]
     assert ordered[0].forced is True
     assert ordered[0].kind == "must_include"
@@ -1584,3 +1605,314 @@ def test_assemble_opens_on_the_must_include_and_keeps_every_one(tmp_path):
     filler = [row for row in cuts["cuts"] if row["source"] == "IMG_7227.MOV"]
     assert not filler or filler[0]["play_index"] > 0
     assert cuts["brand"]["cta"] == ""
+
+
+def test_brief_reads_title_under_and_open_scene():
+    named = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\n"
+        "TITLE_UNDER: taller Asian guy pink shirt\n"
+    )
+    assert named.title_under == "taller Asian guy pink shirt"
+    assert named.as_dict()["title_under"] == "taller Asian guy pink shirt"
+    alias = parse_brief("LENGTH: 20s\nSTYLE: talking\nOPEN_SCENE: John\n")
+    assert alias.title_under == "John"
+    both = parse_brief(
+        "LENGTH: 20s\nSTYLE: talking\n"
+        "TITLE_UNDER: John\n"
+        "OPEN_SCENE: someone else\n"
+    )
+    assert both.title_under == "John"
+    absent = parse_brief("LENGTH: 20s\nSTYLE: talking\n")
+    assert absent.title_under == ""
+
+
+def test_talking_gap_fills_with_speech_not_a_silent_pause():
+    """Must-includes stay in. The open length is talking, not the still between them."""
+    from modules.club.montage import select_with_forced
+
+    forced = [
+        Window(
+            "a.mp4", "a.mp4", 1.0, 3.0, 0, 0.2, 1, 0,
+            forced=True, include="hold your finish", kind="must_include",
+        ),
+        Window(
+            "c.mp4", "c.mp4", 2.0, 4.5, 0, 0.2, 1, 0,
+            forced=True, include="we play at four", kind="must_include",
+        ),
+    ]
+    silent = Window("b.mp4", "b.mp4", 0, 8, 0.95, 0.0, 0.0, 0, score=5)
+    low_motion = Window("c.mp4", "c.mp4", 12, 20, 0.4, 0.01, 0.05, 0, score=4)
+    talking = Window("a.mp4", "a.mp4", 10, 18, 0.1, 0.7, 0.92, 0, score=1)
+    picked = select_with_forced(
+        [silent, low_motion, talking], forced, 12, 12, style="talking",
+    )
+    assert [window.include for window in picked if window.forced] == [
+        "hold your finish", "we play at four",
+    ]
+    fillers = [window for window in picked if not window.forced]
+    assert fillers
+    assert {window.source for window in fillers} == {"a.mp4"}
+    assert all(window.speech >= 0.35 for window in fillers)
+    assert sum(window.duration for window in picked) == pytest.approx(12, abs=0.05)
+    # Hype still may use a loud window. Talking is the path that refuses the pause.
+    hype = select_with_forced([silent], forced, 12, 12, style="hype")
+    assert any(window.source == "b.mp4" for window in hype)
+
+
+def test_speech_beside_a_must_include_fills_the_open_length():
+    """A highlight that sits inside a long quiet window does not hide the talking next to it."""
+    from modules.club.montage import select_with_forced
+
+    forced = [
+        Window(
+            "lesson.mp4", "lesson.mp4", 0.5, 2.2, 0, 0.1, 1, 0,
+            forced=True, include="hold your finish", kind="must_include",
+        ),
+    ]
+    wide = Window("lesson.mp4", "lesson.mp4", 0, 8, 0.0, 0.4, 0.15, 0, score=0.8)
+    silent = Window("still.mp4", "still.mp4", 0, 8, 0.8, 0.0, 0.0, 0, score=2)
+    segments = {
+        "lesson.mp4": [
+            {"start": 0.8, "end": 2.0, "text": "hold your finish"},
+            {"start": 3.0, "end": 7.5, "text": "watch the ball and finish tall"},
+        ],
+    }
+    picked = select_with_forced(
+        [wide, silent], forced, 8, 8,
+        style="talking",
+        segments_by_source=segments,
+        durations={"lesson.mp4": 12, "still.mp4": 8},
+    )
+    fillers = [window for window in picked if not window.forced]
+    assert len(picked) >= 2
+    assert picked[0].forced and picked[0].include == "hold your finish"
+    assert fillers
+    assert all(window.source == "lesson.mp4" for window in fillers)
+    assert all(window.start >= 2.2 - 0.05 for window in fillers)
+    assert all(window.speech >= 0.35 for window in fillers)
+    assert not any(window.source == "still.mp4" for window in picked)
+
+
+def test_title_under_opens_on_that_person_not_a_silent_match():
+    other = Window(
+        "a.mp4", "a.mp4", 1, 4, 0.2, 0.2, 1, 0,
+        forced=True, include="hold your finish", kind="must_include",
+        heard="hold your finish",
+    )
+    john = Window(
+        "b.mp4", "b.mp4", 2, 5, 0.2, 0.2, 1, 0,
+        forced=True, include="we play at four", kind="must_include",
+        heard="we play at four with John",
+    )
+    silent = Window(
+        "john-still.mp4", "john-still.mp4", 0, 4, 0, 0, 0, 0,
+        score=9, heard="John is standing still",
+    )
+    plain = playback_order([john, silent, other], "talking")
+    assert plain[0].source == "a.mp4"
+    named = playback_order([john, silent, other], "talking", scene="John")
+    assert named[0].source == "b.mp4"
+    assert named[0].kind == "must_include"
+    # The still names John and sorts first. It does not take the title.
+    without_john_line = playback_order([silent, other], "talking", scene="John")
+    assert without_john_line[0].source == "a.mp4"
+    described = playback_order(
+        [
+            other,
+            Window(
+                "c.mp4", "c.mp4", 0, 4, 0.1, 0.4, 0.8, 0,
+                heard="the taller Asian guy pink shirt is talking",
+            ),
+        ],
+        "talking",
+        scene="taller Asian guy pink shirt",
+    )
+    assert described[0].source == "c.mp4"
+
+
+def test_assemble_fills_the_gap_and_opens_on_title_under(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 12s\nSTYLE: talking\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+        "TITLE_ACCENT: John Wang\n"
+        "TITLE_UNDER: John\n"
+        "MUST_INCLUDE:\n"
+        "- a.mp4: \"hold your finish\"\n"
+        "- c.mp4: \"we play at four\"\n",
+        encoding="utf-8",
+    )
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {
+                "source": "a.mp4",
+                "duration_s": 20,
+                "segments": [
+                    {"start": 1.0, "end": 2.2, "text": "hold your finish"},
+                    {"start": 8.0, "end": 16.0, "text": "keep your eye on the ball and finish"},
+                ],
+            },
+            {"source": "b.mp4", "duration_s": 8, "segments": []},
+            {
+                "source": "c.mp4",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 3.0,
+                    "end": 5.0,
+                    "text": "we play at four with John",
+                }],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def motion(path, duration):
+        if str(path).endswith("b.mp4"):
+            return [0.0] * max(1, int(duration))
+        return [0.6] * max(1, int(duration))
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=lambda _p: {"duration": 8.0 if str(_p).endswith("b.mp4") else 20.0},
+        peaks=lambda _p: [1, 2, 3, 4, 5, 6],
+        motion=motion,
+    )
+    assert cuts["title_under"] == "John"
+    assert cuts["cuts"][0]["source"] == "c.mp4"
+    assert cuts["cuts"][0].get("kind") == "must_include"
+    forced = [row for row in cuts["cuts"] if row.get("forced")]
+    assert {row["source"] for row in forced} == {"a.mp4", "c.mp4"}
+    assert all(row["matched"] and row["kept"] for row in cuts["includes"])
+    assert not any(row["source"] == "b.mp4" for row in cuts["cuts"])
+    fillers = [row for row in cuts["cuts"] if not row.get("forced")]
+    assert fillers
+    assert all(row["speech"] >= 0.35 for row in fillers)
+    assert all(not is_silent_still(Window(
+        row["source"], row["source"], row["start"], row["end"],
+        row["audio"], row["motion"], row["speech"], row["keyword"],
+    )) for row in fillers)
+    # "hold your finish" keeps two seconds after the line, so the cut can
+    # run slightly past LENGTH. It does not do that with a silent clip.
+    assert cuts["assembled_seconds"] >= 11
+    hold = next(row for row in forced if row["source"] == "a.mp4")
+    assert hold["end"] >= 4.0
+
+
+def test_silent_stills_do_not_fill_the_middle_when_talking_or_action_exists():
+    """A short silent clip must not follow the title just because it fits."""
+    from modules.club.montage import _talking_pack_rank
+
+    talking = Window("talk.mp4", "talk.mp4", 0, 6, 0.1, 0.2, 0.9, 0, score=2)
+    action = Window("move.mp4", "move.mp4", 0, 8, 0.2, 0.8, 0.1, 0, score=1)
+    dead = Window("still.mp4", "still.mp4", 0, 4, 0.95, 0.0, 0.0, 0, score=9)
+    picked = select_windows(
+        [dead, action, talking], 6, 12, target=12,
+        rank=_talking_pack_rank, prefer_alive=True,
+    )
+    assert [window.source for window in picked][0] == "talk.mp4"
+    assert all(window.source != "still.mp4" for window in picked)
+    assert any(window.source == "move.mp4" for window in picked)
+    # Nothing alive left: the still may fill, and it sorts last.
+    only_dead = select_windows(
+        [dead, Window("other.mp4", "other.mp4", 0, 4, 0.2, 0.02, 0.0, 0, score=1)],
+        6, 8, rank=_talking_pack_rank, prefer_alive=True,
+    )
+    assert only_dead
+    assert all(is_silent_still(window) for window in only_dead)
+    ordered = playback_order([dead, talking, action], "talking")
+    assert ordered[-1].source == "still.mp4"
+    assert [window.source for window in ordered if not is_silent_still(window)] == [
+        "move.mp4", "talk.mp4",
+    ]
+
+
+def test_check_your_feet_and_pause_hold_the_beat():
+    from modules.club.pick import extend_coaching_window
+
+    feet = [
+        {"start": 1.0, "end": 2.4, "text": "check your feet", "words": [
+            {"start": 1.0, "end": 1.4, "text": "check"},
+            {"start": 1.4, "end": 1.7, "text": "your"},
+            {"start": 1.7, "end": 2.4, "text": "feet"},
+        ]},
+    ]
+    start, end = extend_coaching_window(0.75, 2.65, 20.0, feet)
+    assert start == pytest.approx(0.75)
+    assert end == pytest.approx(4.4, abs=0.05)
+
+    already = extend_coaching_window(0.75, 6.0, 20.0, feet)
+    assert already == (0.75, 6.0)
+
+    pause = [{"start": 3.0, "end": 4.2, "text": "pause there"}]
+    _start, pause_end = extend_coaching_window(3.0, 4.3, 20.0, pause)
+    assert pause_end == pytest.approx(6.2, abs=0.05)
+
+    hold = [{"start": 2.0, "end": 3.2, "text": "hold your finish"}]
+    _start, hold_end = extend_coaching_window(1.75, 3.45, 30.0, hold)
+    assert hold_end == pytest.approx(5.2, abs=0.05)
+
+    clamped = extend_coaching_window(0.75, 2.65, 3.0, feet)
+    assert clamped[1] == pytest.approx(3.0)
+
+    plain = [{"start": 1.0, "end": 2.0, "text": "we play at four"}]
+    assert extend_coaching_window(0.75, 2.25, 20.0, plain) == (0.75, 2.25)
+
+
+def test_assemble_holds_check_your_feet_and_skips_the_silent_follow(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 10s\nSTYLE: talking\n"
+        "TITLE: Private lesson\n"
+        "MUST_INCLUDE: \"check your feet\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "coach.mp4").write_bytes(b"a")
+    (tmp_path / "still.mp4").write_bytes(b"b")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {
+                "source": "coach.mp4",
+                "duration_s": 20,
+                "segments": [
+                    {
+                        "start": 1.0,
+                        "end": 2.4,
+                        "text": "check your feet",
+                        "words": [
+                            {"start": 1.0, "end": 1.4, "text": "check"},
+                            {"start": 1.4, "end": 1.7, "text": "your"},
+                            {"start": 1.7, "end": 2.4, "text": "feet"},
+                        ],
+                    },
+                    {"start": 8.0, "end": 14.0, "text": "now watch the ball all the way"},
+                ],
+            },
+            {"source": "still.mp4", "duration_s": 8, "segments": []},
+        ],
+    }), encoding="utf-8")
+
+    def motion(path, duration):
+        if str(path).endswith("still.mp4"):
+            return [0.0] * max(1, int(duration))
+        return [0.5] * max(1, int(duration))
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=lambda path: {"duration": 8.0 if str(path).endswith("still.mp4") else 20.0},
+        peaks=lambda _p: [1, 2, 3],
+        motion=motion,
+    )
+    assert not any(row["source"] == "still.mp4" for row in cuts["cuts"])
+    cue = next(row for row in cuts["cuts"] if row.get("forced"))
+    assert cue["source"] == "coach.mp4"
+    assert cue["end"] == pytest.approx(4.4, abs=0.15)
+    assert "check your feet" in cue["include"]
+    fillers = [row for row in cuts["cuts"] if not row.get("forced")]
+    assert fillers
+    assert all(row["speech"] >= 0.35 or row["motion"] >= 0.15 for row in fillers)
+    assert all(row["matched"] and row["kept"] for row in cuts["includes"])
