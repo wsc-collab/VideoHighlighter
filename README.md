@@ -111,9 +111,11 @@ Portable builds, GPU setup, where it writes, and fixing an oversized UI:
 This fork's club path is a talking pack: a folder of real clips and a
 `brief.md` (`LENGTH`, `STYLE: talking`, a who/what `TITLE`, optional
 `CTA`). Title, captions, and the call to action are white or black on
-the picture, with a stroke and no filled plate. It ranks windows with local Whisper,
-audio peaks, and motion, joins a straight cut, then burns a title for the
-opening seconds, captions of what was said, and a call to action at the
+the picture, with a stroke and no filled plate. `pick` writes a transcript
+and a motion timeline (local Whisper, default model `medium`) so in and out
+points can be chosen from both. The assemble step ranks a fallback fill with
+that speech, audio peaks, and motion, joins a straight cut, then burns a title
+for the opening seconds, captions of what was said, and a call to action at the
 end. Caption words come from the speech. Silent hype montages stay in
 CapCut; this repo does not automate those templates.
 

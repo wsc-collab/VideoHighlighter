@@ -211,7 +211,7 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
         return [0.0] * 8
 
     def transcribe(path, model, log_fn):
-        assert model == "small"
+        assert model == "medium"
         if path.endswith("a.mp4"):
             return [{"start": 1.0, "end": 2.0, "text": "what an ace"}]
         return [{"start": 0.0, "end": 1.0, "text": "back to the place"}]
@@ -253,9 +253,19 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
     on_disk = json.loads((tmp_path / "cuts.json").read_text(encoding="utf-8"))
     scores = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
     assert on_disk["output"] == "draft.mp4"
-    assert scores["signals"]["whisper"] == "small"
+    assert scores["signals"]["whisper"] == "medium"
     assert scores["signals"]["audio_peaks"] is True
     assert scores["signals"]["motion"] is True
+    assert scores["signals"]["cut_timeline"] == "timeline.json"
+    assert cuts["whisper"] == "medium"
+    timeline = json.loads((tmp_path / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline["whisper"] == "medium"
+    heard = [
+        moment["text"]
+        for item in timeline["files"]
+        for moment in item["moments"]
+    ]
+    assert "what an ace" in heard
     assert scores["draft_written"] is True
     assert (tmp_path / "draft.mp4").read_bytes() == b"draft"
     assert any(row["selected"] for row in scores["windows"])
@@ -1241,10 +1251,16 @@ def test_pick_writes_a_transcript_and_does_not_assemble(tmp_path, monkeypatch):
         whisper_model="tiny",
         probe=lambda _p: {"duration": 10},
         transcribe=transcribe,
+        motion=lambda _path, duration: [0.0] * int(duration),
     )
     assert result["draft_written"] is False
     assert (tmp_path / "draft.mp4").read_bytes() == b"stale"
     assert not (tmp_path / "cuts.json").exists()
+    timeline = json.loads(Path(result["timeline_json"]).read_text(encoding="utf-8"))
+    assert timeline["whisper"] == "tiny"
+    assert timeline["files"][0]["moments"][0]["text"] == "hold your finish"
+    assert timeline["files"][0]["moments"][0]["in"] < 1.0
+    assert timeline["files"][0]["moments"][0]["out"] > 2.4
     md = Path(result["transcript_md"]).read_text(encoding="utf-8")
     body = json.loads(Path(result["transcript_json"]).read_text(encoding="utf-8"))
     assert "hold your finish" in md

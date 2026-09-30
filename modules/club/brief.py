@@ -37,10 +37,12 @@ same place as ``two_fifths``. A non-talking brief that omits the field
 stays at ``center``.
 
 ``LENGTH`` is the finished draft's duration. A single number (``30s``) means
-that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
-``NOTES`` may be empty. ``NOTES`` is stored for the editor. It is not a
-prompt and it is not caption text. Without a title, subtitle, or call to
-action, a non-talking brief stays a highlights cut.
+that exact length. ``LENGTH: none`` means there is no target: the cut is
+only the moments named in ``MUST_INCLUDE`` and ``INCLUDE_WINDOWS``, and
+nothing is added to fill a runtime. ``STYLE`` is ``hype`` or ``talking``.
+``KEYWORDS`` and ``NOTES`` may be empty. ``NOTES`` is stored for the
+editor. It is not a prompt and it is not caption text. Without a title,
+subtitle, or call to action, a non-talking brief stays a highlights cut.
 
 ``MUST_INCLUDE`` is optional. Each line is a quote or a short description
 of a moment from the transcript. ``INCLUDE_WINDOWS`` is optional too:
@@ -129,6 +131,7 @@ class Brief:
     must_include: tuple[str, ...] = ()
     include_windows: tuple[tuple[str, float, float], ...] = ()
     title_under: str = ""
+    open_length: bool = False
 
     def wants_brand(self) -> bool:
         """True when the brief asks for type on the cut.
@@ -141,6 +144,7 @@ class Brief:
         return {
             "length_min_s": self.length_min_s,
             "length_max_s": self.length_max_s,
+            "open_length": self.open_length,
             "style": self.style,
             "keywords": list(self.keywords),
             "notes": self.notes,
@@ -167,10 +171,17 @@ class Brief:
 
 
 def parse_length(text: str) -> tuple[float, float]:
-    """Return ``(min_seconds, max_seconds)`` from a LENGTH value."""
+    """Return ``(min_seconds, max_seconds)`` from a LENGTH value.
+
+    ``none`` is no target length. Both numbers are 0, and
+    :attr:`Brief.open_length` is set by :func:`parse_brief`. The ranker
+    does not invent a runtime from that.
+    """
     raw = " ".join(text.split())
     if not raw:
-        raise BriefError("LENGTH is empty. Example: LENGTH: 20-35s")
+        raise BriefError("LENGTH is empty. Example: LENGTH: 20-35s or LENGTH: none")
+    if raw.casefold() == "none":
+        return 0.0, 0.0
     match = _RANGE.search(raw)
     if match:
         lo, hi = float(match.group(1)), float(match.group(2))
@@ -488,7 +499,8 @@ def parse_brief(text: str, source: str = "") -> Brief:
             + ", ".join(missing)
             + ". Required lines: LENGTH: 20-35s and STYLE: hype or STYLE: talking."
         )
-    lo, hi = parse_length(fields["LENGTH"])
+    length_text = " ".join(fields["LENGTH"].split())
+    lo, hi = parse_length(length_text)
     style = parse_style(fields["STYLE"])
     stroke_color, stroke_width = parse_caption_stroke(fields.get("CAPTION_STROKE", ""))
     return Brief(
@@ -520,6 +532,7 @@ def parse_brief(text: str, source: str = "") -> Brief:
             _one_line(fields.get("TITLE_UNDER", ""))
             or _one_line(fields.get("OPEN_SCENE", ""))
         ),
+        open_length=length_text.casefold() == "none",
     )
 
 

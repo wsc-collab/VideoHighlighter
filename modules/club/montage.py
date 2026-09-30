@@ -20,10 +20,17 @@ captions of the speech between the title and the call to action. Those
 words come from local Whisper. ``NOTES`` is copied into the JSON for the
 editor. It is not a prompt and it is not caption text.
 
-``pick`` (or ``--transcript-only``) writes a transcript and stops, so a
-person can choose lines before anything is cut. ``MUST_INCLUDE`` and
-``INCLUDE_WINDOWS`` force those moments in. The ranker still fills the
-rest of LENGTH. On a talking cut that fill is high speech, then action.
+``pick`` (or ``--transcript-only``) writes a transcript and a cut
+timeline and stops, so a person can choose lines before anything is
+cut. The timeline is the full transcript plus per-second motion, and a
+suggested in and out on each stretch of speech. That is how an agent
+picks the cut: pad before the words, keep the doing take when a line
+is repeated, end after the action and about 2.5 seconds of quiet.
+``MUST_INCLUDE`` is the person's list of quotes. ``INCLUDE_WINDOWS``
+is the ranges chosen from the timeline. Neither is a group number.
+The ranker still fills the rest of LENGTH when a length was set. On a
+talking cut that fill is high speech, then action. ``LENGTH: none``
+keeps only the named moments.
 A silent or low-motion window ranks at the bottom and is not used in
 the middle of the pack while talking or action is still available. A
 Whisper line that is digit spam or has no words is not speech, so it
@@ -38,7 +45,8 @@ when that still fits in LENGTH. Past the brief, filler is tightened
 instead of letting the hold run the draft long. That hold is the talking
 default for every clip, not a KEYWORDS match. A
 kept highlight that is missing from the final cut stops the run. With
-neither field, the ranker chooses on its own. Talking playback follows
+neither field and a LENGTH set, the ranker chooses on its own.
+``LENGTH: none`` with neither field writes no cut. Talking playback follows
 clip name and time, except the opener: that cut is the ``TITLE_UNDER``
 / ``OPEN_SCENE`` match when the brief names who is under the title
 (a slash separates alternatives), otherwise a must-include, otherwise
@@ -73,6 +81,8 @@ from modules.club.pick import (
     transcript_payload,
 )
 from modules.club.captions import (
+    DEFAULT_WHISPER_MODEL,
+    WHISPER_MODEL_HELP,
     apply_talking_pack,
     caption_cues,
     caption_record,
@@ -81,11 +91,7 @@ from modules.club.captions import (
     talking_windows,
     transcribe_captions,
 )
-
-# ``base`` mis-heard short coaching cues ("finish" as "if I", and a Spanish
-# line). ``small`` is the talking-pack default. ``--whisper-model medium``
-# is the larger step when a take is still muddy.
-DEFAULT_WHISPER_MODEL = "small"
+from modules.club.timeline import build_timeline, render_timeline_md
 
 
 # Stated on every run so a later reader can see what the files are.
@@ -105,7 +111,10 @@ ASSEMBLE_ONLY = {
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 # Written into the clips folder on a previous run. Never a source.
-OUTPUT_NAMES = {"draft.mp4", "cuts.json", "scores.json", "transcript.md", "transcript.json"}
+OUTPUT_NAMES = {
+    "draft.mp4", "cuts.json", "scores.json",
+    "transcript.md", "transcript.json", "timeline.md", "timeline.json",
+}
 
 # (window seconds, hop seconds). Short punches for hype, longer holds for talk.
 STYLE_WINDOW = {
@@ -1510,6 +1519,38 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_cut_timeline(
+    destination: Path,
+    files: list[dict],
+    whisper: str,
+    *,
+    engine: str | None = None,
+    transcript_whisper: str | None = None,
+    log_fn=print,
+) -> dict:
+    """Write ``timeline.json`` and ``timeline.md`` next to the other outputs.
+
+    The json is what an agent reads to choose in and out. The markdown is
+    the same moments in a form a person can scan while naming must-includes.
+    """
+    payload = build_timeline(
+        files,
+        whisper,
+        engine=engine,
+        transcript_whisper=transcript_whisper,
+    )
+    json_path = destination / "timeline.json"
+    md_path = destination / "timeline.md"
+    _write_json(json_path, payload)
+    md_path.write_text(render_timeline_md(payload), encoding="utf-8")
+    log_fn(f"timeline.json: {json_path}")
+    log_fn(
+        "Choose in and out from timeline.json. A repeated line prefers the "
+        "doing take. out waits through the action and about 2.5s of quiet."
+    )
+    return payload
+
+
 def _burn_talking_pack(
     draft_path, destination, brief, assembled, cuts, scores, *,
     use_whisper: bool, whisper_model: str, caption_fn, talking_burn, log_fn,
@@ -1688,11 +1729,16 @@ def run_club_montage(
             "Level only, not a picture match."
         ),
     }
+    if brief.open_length:
+        length_label = "none"
+    else:
+        length_label = f"{brief.length_min_s:g}-{brief.length_max_s:g}s"
     log_fn(
         f"Club montage: {len(clips)} clip(s), "
-        f"LENGTH {brief.length_min_s:g}-{brief.length_max_s:g}s, "
+        f"LENGTH {length_label}, "
         f"STYLE {brief.style}."
     )
+    log_fn(f"Whisper model: {whisper_status}.")
     log_fn(ASSEMBLE_ONLY["note"])
     if brief.style == "hype":
         log_fn(
@@ -1728,6 +1774,8 @@ def run_club_montage(
     windows: list[Window] = []
     durations: dict[str, float] = {}
     heard: dict[str, list] = {}
+    motion_by: dict[str, list] = {}
+    transcribed_live = False
     for path in clips:
         report = {"source": path.name, "duration_s": None, "error": None}
         saved = saved_rows.get(path.name.casefold()) or {}
@@ -1752,12 +1800,14 @@ def run_club_montage(
             except Exception as exc:
                 log_fn(f"motion skipped for {path.name}: {exc}")
                 motion_series = []
+            motion_by[path.name] = list(motion_series or [])
             segments: list = []
             if saved_segments is not None:
                 segments = list(saved_segments)
             elif use_whisper and whisper_status == whisper_model:
                 try:
                     segments = segments_of(transcribe_live(str(path), whisper_model, log_fn))
+                    transcribed_live = True
                 except Exception as exc:
                     log_fn(f"whisper skipped for {path.name}: {exc}")
                     segments = []
@@ -1784,6 +1834,28 @@ def run_club_montage(
             report["error"] = str(exc)
             log_fn(f"  skipped {path.name}: {exc}")
         clip_reports.append(report)
+
+    transcript_whisper = None
+    if saved_payload and saved_payload.get("whisper"):
+        transcript_whisper = str(saved_payload.get("whisper"))
+    timeline_whisper = whisper_status
+    if transcript_whisper and not transcribed_live:
+        timeline_whisper = transcript_whisper
+    _write_cut_timeline(
+        destination,
+        [
+            {
+                "source": path.name,
+                "duration_s": durations.get(path.name),
+                "segments": heard.get(path.name, []),
+                "motion": motion_by.get(path.name, []),
+            }
+            for path in clips
+        ],
+        timeline_whisper,
+        transcript_whisper=transcript_whisper,
+        log_fn=log_fn,
+    )
 
     if brief.must_include or brief.include_windows:
         for path in clips:
@@ -1852,7 +1924,10 @@ def run_club_montage(
                 "The cut stays shorter than the brief rather than inserting a silent pause."
             )
     assembled = sum(w.duration for w in ordered)
-    within = brief.length_min_s - 1e-3 <= assembled <= brief.length_max_s + 1e-3
+    if brief.open_length:
+        within = bool(ordered)
+    else:
+        within = brief.length_min_s - 1e-3 <= assembled <= brief.length_max_s + 1e-3
 
     play_of = {
         (w.source, round(w.start, 3)): i for i, w in enumerate(ordered)
@@ -1883,10 +1958,11 @@ def run_club_montage(
         "policy": ASSEMBLE_ONLY,
         "brief": brief.as_dict(),
         "signals": {
-            "whisper": whisper_status,
+            "whisper": timeline_whisper,
             "audio_peaks": True,
             "motion": True,
             "transcript": "reused" if saved_payload else ("live" if use_whisper else "off"),
+            "cut_timeline": "timeline.json",
         },
         "includes": include_rows,
         "order": "chronological" if brief.style == "talking" else "score",
@@ -1904,6 +1980,7 @@ def run_club_montage(
         "policy": ASSEMBLE_ONLY,
         "output": "draft.mp4",
         "style": brief.style,
+        "whisper": timeline_whisper,
         "order": scores["order"],
         "length_min_s": brief.length_min_s,
         "length_max_s": brief.length_max_s,
@@ -2005,11 +2082,14 @@ def run_transcript(
     log_fn=print,
     probe=None,
     transcribe=None,
+    motion=None,
 ) -> dict:
-    """Write ``transcript.md`` and ``transcript.json`` and do not assemble.
+    """Write the transcript and the cut timeline, and do not assemble.
 
     Every clip in the folder is heard, including a quiet phone take, so the
-    person can choose it or skip it. A brief is not required for this step.
+    person can choose it or skip it. Motion is sampled on the same pass so
+    ``timeline.json`` can put the words and the picture on one clock. A
+    brief is not required for this step.
     """
     root = Path(folder).expanduser().resolve()
     if not root.is_dir():
@@ -2018,6 +2098,7 @@ def run_transcript(
     destination.mkdir(parents=True, exist_ok=True)
     probe_fn = probe or default_probe
     transcribe_fn = transcribe or transcribe_captions
+    motion_fn = motion or sample_motion
     if transcribe is None:
         try:
             import whisper  # noqa: F401
@@ -2026,14 +2107,17 @@ def run_transcript(
 
     clips = list_clips(root)
     log_fn(f"Transcript only: {len(clips)} clip(s). No draft will be assembled.")
+    log_fn(f"Whisper model: {whisper_model}.")
     log_fn(ASSEMBLE_ONLY["note"])
     files = []
+    engine = None
     for path in clips:
         row: dict = {
             "source": path.name,
             "path": str(path),
             "duration_s": None,
             "segments": [],
+            "motion": [],
             "error": None,
         }
         try:
@@ -2042,30 +2126,51 @@ def run_transcript(
         except Exception as exc:
             log_fn(f"duration skipped for {path.name}: {exc}")
         try:
-            row["segments"] = segments_of(transcribe_fn(str(path), whisper_model, log_fn))
+            raw = transcribe_fn(str(path), whisper_model, log_fn)
+            if isinstance(raw, dict) and raw.get("engine") and engine is None:
+                engine = str(raw.get("engine"))
+            row["segments"] = segments_of(raw)
         except Exception as exc:
             row["error"] = str(exc)
             log_fn(f"whisper skipped for {path.name}: {exc}")
+        try:
+            row["motion"] = list(motion_fn(str(path), float(row["duration_s"] or 0)) or [])
+        except Exception as exc:
+            log_fn(f"motion skipped for {path.name}: {exc}")
+            row["motion"] = []
         files.append(row)
         log_fn(f"  {path.name}: {len(row['segments'])} lines")
 
     payload = transcript_payload(files, whisper_model)
+    if engine:
+        payload["engine"] = engine
     md_path = destination / "transcript.md"
     json_path = destination / "transcript.json"
     md_path.write_text(render_transcript_md(payload), encoding="utf-8")
     _write_json(json_path, payload)
+    timeline = _write_cut_timeline(
+        destination, files, whisper_model, engine=engine, log_fn=log_fn,
+    )
     log_fn("Transcript only. No draft was assembled.")
     log_fn(f"transcript.md: {md_path}")
     log_fn(f"transcript.json: {json_path}")
     log_fn(
-        "Show this transcript and ask which lines to highlight, or skip "
-        "and let the ranker choose."
+        "Ask for LENGTH (or none) and any must-include quotes before encoding. "
+        "Choose in and out from timeline.json. The transcript is the list a "
+        "person reads to name those quotes."
     )
     return {
         "transcript_md": str(md_path),
         "transcript_json": str(json_path),
+        "timeline_json": str(destination / "timeline.json"),
+        "timeline_md": str(destination / "timeline.md"),
         "whisper": whisper_model,
         "files": payload["files"],
+        "moments": [
+            moment
+            for item in timeline.get("files") or []
+            for moment in item.get("moments") or []
+        ],
         "draft_written": False,
     }
 
@@ -2097,14 +2202,15 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Assemble a talking cut from real clips and a brief.md. "
             "Burns a title, captions of the speech, and a call to action. "
-            "`pick` or --transcript-only writes a transcript and stops. "
+            "`pick` or --transcript-only writes a transcript and a cut "
+            "timeline (speech plus motion) and stops. "
             "Does not generate footage, faces, voices, or music."
         ),
     )
     parser.add_argument(
         "folder",
         nargs="*",
-        help="Clips folder. `pick <folder>` writes a transcript and stops.",
+        help="Clips folder. `pick <folder>` writes a transcript and a cut timeline, and stops.",
     )
     parser.add_argument("--club", help="Clips folder. Same as the positional argument; used by main.py.")
     parser.add_argument("--brief", help="Path to brief.md (default: <folder>/brief.md)")
@@ -2112,10 +2218,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--whisper-model",
         default=DEFAULT_WHISPER_MODEL,
-        help=(
-            "Local Whisper model name (default: small). "
-            "Use medium when a take is still muddy. Weights stay on this machine."
-        ),
+        help=WHISPER_MODEL_HELP,
     )
     parser.add_argument(
         "--no-whisper",
@@ -2131,8 +2234,8 @@ def main(argv: list[str] | None = None) -> int:
         "--transcript-only",
         action="store_true",
         help=(
-            "Transcribe the folder, write transcript.md and transcript.json, "
-            "and stop. No draft."
+            "Transcribe the folder, write transcript.md, transcript.json, "
+            "and timeline.json, and stop. No draft."
         ),
     )
     args = parser.parse_args(argv)

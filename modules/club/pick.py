@@ -427,9 +427,9 @@ def render_transcript_md(payload: dict) -> str:
         "",
         f"Whisper: {payload.get('whisper') or 'unknown'}",
         "",
-        "Ask which lines to highlight, or skip and let the ranker choose.",
-        "Add the choice to brief.md as MUST_INCLUDE (a quoted line) or",
-        "INCLUDE_WINDOWS (a file and a start-end), then run the assemble step.",
+        "This list is for naming must-include quotes. In and out points are",
+        "in timeline.json, next to the motion around each line. Ask for",
+        "LENGTH (or none) and those quotes before encoding.",
         "",
     ]
     for item in payload.get("files") or []:

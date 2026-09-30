@@ -14,26 +14,44 @@ hype reels stay in CapCut Web: drop the clips there and edit the template
 text. This repo does not automate CapCut.
 
 If a moment is missing, the fix is another real clip or a different in/out
-in `cuts.json`. Caption lines are the transcript. They are not copy written
-in the brief.
+taken from `timeline.json` and written into the brief. `cuts.json` is the
+plan the assembler used. Caption lines are the transcript. They are not
+copy written in the brief.
+
+The cut is chosen from the full transcript and the per-second motion, not
+from a numbered group on a pick list. `timeline.json` puts both on one
+clock. A quote list is still how a person names a line that has to be in.
 
 The desktop highlighter is unchanged. Automated runs use the CLI below.
 
 ## Two-step talking pick
 
-A person can choose the lines before anything is cut.
+Ask two things before anything is encoded:
 
-1. **Transcript.** Whisper reads every clip in the folder and writes
+1. **LENGTH** — `30s`, `20-35s`, or **none**. None means the cut is only
+   the moments named below. Do not invent a target runtime.
+2. **Must-include moments or quotes** — lines the person wants kept, in
+   their words. A quote that is not in the transcript is listed in
+   `cuts.json` and is not invented.
+
+The transcript can be made first, so those quotes are chosen from what
+was actually said. Encoding waits until both answers are in `brief.md`.
+
+1. **Transcript and motion.** Whisper reads every clip and writes
    `transcript.md` (readable, with times) and `transcript.json` (per file,
-   segment times, and word times). No `draft.mp4`.
+   segment times, and word times). The same pass measures motion and
+   writes `timeline.json` (and `timeline.md`). No `draft.mp4`.
 
    ```bash
    python -m modules.club pick "/path/to/clips"
    python -m modules.club "/path/to/clips" --transcript-only
    ```
 
-   The command prints `transcript.md: ...`. Show that file and ask which
-   lines to highlight, or skip and let the ranker choose.
+   The command prints `transcript.md: ...` and `timeline.json: ...`.
+   Show the transcript so a person can name must-include quotes. Choose
+   in and out from the timeline. Do not pick a window index or a group
+   number off `scores.json`. That grid is only a fallback fill when
+   LENGTH is set and no ranges were named.
 
 2. **Assemble.** Add the choice to `brief.md`, then run without `pick`.
    The title, captions, and optional call to action are unchanged.
@@ -61,8 +79,10 @@ A person can choose the lines before anything is cut.
    rally.mov 12.0-18.5
    ```
 
-   Those windows are cut in. The ranker still fills whatever is left of
-   `LENGTH`. On a talking cut that fill is high speech, then action.
+   Those windows are cut in. When LENGTH is a duration, the ranker still
+   fills whatever is left of it. On a talking cut that fill is high speech,
+   then action. `LENGTH: none` does not fill: the named moments are the cut.
+   With none and no moments, nothing is encoded.
    A silent or low-motion window ranks at the bottom. It is not placed
    in the middle of the pack, and it is not used at all while a talking
    or action window is still available. When the transcript cues a beat —
@@ -73,8 +93,9 @@ A person can choose the lines before anything is cut.
    brief. Other filler is tightened first, and the hold is shortened
    only when that is the only way to stay on `LENGTH`. This is the
    talking default for every clip. `KEYWORDS` do not turn it on. Leave both
-   fields out and the ranker chooses on its own,
-   as before. A quote that is not in the transcript is listed in
+   fields out, with a LENGTH set, and the ranker chooses on its own,
+   as before. `LENGTH: none` with both fields empty writes no cut.
+   A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
    `INCLUDE_WINDOWS` file that is not in the folder stops the run.
    A window that was kept and then does not appear in the final cut
@@ -172,7 +193,7 @@ CAPTION_POSITION: bottom
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `LENGTH` | yes | Finished draft length. `20-35s` is a range. `30s` is exact. |
+| `LENGTH` | yes | Finished draft length. `20-35s` is a range. `30s` is exact. `none` keeps only the named moments and does not fill a runtime. |
 | `STYLE` | yes | `talking` for this pack. `hype` only ranks louder, busier windows and does not burn speech captions. |
 | `KEYWORDS` | no | Words to boost when local Whisper hears them while choosing windows. Not caption text. |
 | `MUST_INCLUDE` | no | Quoted lines or short moments to force into the cut. Mapped to the transcript. One per line. |
@@ -245,8 +266,9 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   cue covers about 75% of the width, and stays smaller than the title.
   Type is white with a black stroke and no box. A phrase that would
   overflow is the next timed cue, not a second line. The engine is
-  local Whisper, in English, model `small` unless you pass another.
-  `base` mis-heard short cues. `faster-whisper` is used when that
+  local Whisper, in English, model `medium` unless you pass another.
+  `base` mis-heard short cues, and `small` still drops words a lesson
+  needs. `faster-whisper` is used when that
   package is installed, otherwise `openai-whisper` from
   `requirements.txt`. No caption is sent to a paid API.
   The cues are written to `captions.md` before the burn, and
@@ -294,10 +316,12 @@ Both read `/path/to/clips/brief.md` and write into that folder:
 | File | What it is |
 | --- | --- |
 | `draft.mp4` | The assembled review cut. Original audio from the clips. Not written by `pick`. |
-| `cuts.json` | Windows in playback order: source file, start, end, score. Forced highlights are marked. |
-| `scores.json` | Every candidate window, which signals fired, and which were kept. |
-| `transcript.md` | Readable transcript with times. Written by `pick` / `--transcript-only`. |
-| `transcript.json` | The same transcript per file, with segment and word times. |
+| `cuts.json` | Windows in playback order: source file, start, end, score. Forced highlights are marked. `whisper` is the model that produced the words. |
+| `scores.json` | Every candidate window, which signals fired, and which were kept. `signals.whisper` is that same model. `signals.cut_timeline` points at `timeline.json`. The window list is a fallback fill, not a pick list of group numbers. |
+| `transcript.md` | Readable transcript with times. Written by `pick` / `--transcript-only`. For naming quotes. |
+| `transcript.json` | The same transcript per file, with segment and word times. `whisper` is the model that was run. |
+| `timeline.json` | Full transcript plus per-second motion, and a suggested `in` / `out` on each stretch of speech. This is the cut editor. |
+| `timeline.md` | The same moments, readable. |
 
 Clips sit **in that folder**, not in subfolders. `mp4`, `mov`, `m4v`, `mkv`,
 `avi`, and `webm` are read. A previous `draft.mp4` is not treated as a source.
@@ -305,7 +329,8 @@ Clips sit **in that folder**, not in subfolders. `mp4`, `mov`, `m4v`, `mkv`,
 Useful flags:
 
 ```bash
-python -m modules.club ./clips --whisper-model medium
+python -m modules.club ./clips --whisper-model large-v3
+python -m modules.club ./clips --whisper-model small
 python -m modules.club ./clips --no-whisper
 python -m modules.club ./clips --brief ~/briefs/saturday.md --out ~/Desktop/out
 python -m modules.club ./clips --dry-run
@@ -315,10 +340,17 @@ python -m modules.club ./clips --transcript-only
 
 `--dry-run` writes the JSON and does not encode `draft.mp4`.
 `--no-whisper` ranks on audio peaks and motion only.
-`--whisper-model` defaults to `small`. Use `medium` when a take is still
-muddy, or `base` to go back to the smaller model. Caption language is English.
-`pick` and `--transcript-only` write `transcript.md` and `transcript.json`
-and do not assemble a draft. See [Two-step talking pick](#two-step-talking-pick).
+`--whisper-model` defaults to `medium`. Use `large-v3` when a take is still
+muddy, or `small` for a faster pass. `base` is still accepted and is the
+model that mis-heard short cues. Caption language is English.
+The model name is written on `transcript.json` (`whisper`), `timeline.json`
+(`whisper`), `cuts.json` (`whisper`), and `scores.json` (`signals.whisper`).
+Assemble reuses `transcript.json` when it is already there, so that name
+is the model that actually heard the clips. Delete `transcript.json` to
+hear them again with the model on the command line.
+`pick` and `--transcript-only` write `transcript.md`, `transcript.json`,
+`timeline.md`, and `timeline.json`, and do not assemble a draft.
+See [Two-step talking pick](#two-step-talking-pick).
 Exit code `0` means a draft plan with at least one cut was written.
 Exit code `2` means the folder or the brief could not be read.
 
@@ -326,9 +358,11 @@ Exit code `2` means the folder or the brief could not be read.
 
 In order of preference:
 
-1. **Local Whisper** (`openai-whisper`, default model `small`). Transcripts stay
+1. **Local Whisper** (`openai-whisper`, default model `medium`). Transcripts stay
    on this machine. The first run downloads the model weights into the local
    cache. Keyword hits and speech coverage come from that transcript.
+   `timeline.json` is the full transcript beside per-second motion, which is
+   what a cut is chosen from. The scored windows below are the fallback fill.
 2. **Audio peaks** (`modules/audio/audio_peaks.py`) for impacts, calls, and
    crowd noise.
 3. **Motion**, sampled with ffmpeg at a few frames a second. The frames are
@@ -419,7 +453,7 @@ Whisper is already in `requirements.txt` (`openai-whisper`). Club scoring does
 not need the object-detection stack; the rest of the requirements file is the
 desktop highlighter.
 
-## How Grok Bot runs a job
+## How Social / Grok Bot runs a job
 
 The bot stages files, then this repo does the cut. Suggested clone on the
 club Mac:
@@ -428,26 +462,75 @@ club Mac:
 ~/Desktop/Marketing/Grok Bot Work/VideoHighlighter
 ```
 
+Do not encode until the person has answered both of these:
+
+1. **LENGTH**, or **none**. `30s` and `20-35s` are targets. `none` means
+   the named moments are the whole cut. Do not invent a runtime.
+2. **Must-include moments or quotes.** Their words. These become
+   `MUST_INCLUDE`. The transcript is the list they pick from. It is not
+   a numbered group, and `scores.json` windows are not a pick list.
+
 For each montage:
 
 1. Download the Drive clips into an empty working folder. Do not send those
    files out for analysis.
-2. Write `brief.md` into that same folder (`LENGTH`, `STYLE`, `KEYWORDS`,
-   `NOTES`). Keywords come from the person requesting the montage.
-3. From the clone:
+2. Hear the folder before the brief is finished, so the quotes are real
+   lines. From the clone:
 
    ```bash
    source .venv/bin/activate
+   python -m modules.club pick "/path/to/staged/clips"
+   ```
+
+   Default Whisper is `medium`. The name is on `transcript.json` and
+   `timeline.json`. A muddier take:
+
+   ```bash
+   python -m modules.club pick "/path/to/staged/clips" --whisper-model large-v3
+   ```
+
+   A faster pass is `--whisper-model small`. Delete `transcript.json`
+   before assemble if the model has to change; assemble will not re-hear
+   a transcript that is already there.
+
+3. Read `timeline.json`. Each file has `segments` (the full transcript,
+   with word times) and `motion` / `motion_norm` (one sample per second).
+   `moments` are the proposed cuts:
+
+   - `in` starts before the words, so the line is not clipped.
+   - `out` starts after the words. If the picture is still moving, `out`
+     waits until that motion drops, then keeps about 2.5 seconds of quiet
+     (between 2 and 3 seconds when the clip has the room). It does not
+     cross the next line. `cut_mid_action` is true when the next line or
+     the end of the clip forced a cut while the picture was still moving.
+     `short_silence` is true when there was not 2 seconds of quiet to keep.
+   - When the same line is in the folder more than once, `take` is
+     `doing` on the occurrence with more motion after the words, and
+     `saying` on the others. `prefer` is true only on the doing take.
+     Keep that one when the coach says the line and then does it. Keep
+     the saying take only when the person asked for the words without
+     the action.
+
+4. Write `brief.md` in that same folder. `STYLE: talking`, the LENGTH
+   answer, `MUST_INCLUDE` for the quotes, and `INCLUDE_WINDOWS` for the
+   ranges copied from the moments (`file start-end`, seconds). Keywords
+   come from the person requesting the montage. Title and brand as usual.
+5. Encode:
+
+   ```bash
    python -m modules.club "/path/to/staged/clips"
    ```
 
-4. Read `draft.mp4`, `cuts.json`, and `scores.json` back from that folder.
-5. If the draft is the wrong length or the wrong moment, change the brief or
-   add another real clip and run again. Do not fill a gap with generated
-   footage, a generated voice, or a generated track.
+6. Read `draft.mp4`, `cuts.json`, `timeline.json`, and `scores.json` back
+   from that folder.
+7. If the draft is the wrong length or the wrong moment, change the brief
+   or add another real clip and run again. Do not fill a gap with generated
+   footage, a generated voice, or a generated track. Do not switch the cut
+   to a group number from the score grid.
 
 `NOTES` is there so the editor can see the request next to the cut list. The
-ranker does not treat it as a generation prompt.
+ranker does not treat it as a generation prompt. `timeline.md` is the same
+moments in a form a person can scan while they name quotes.
 
 ## Desktop app and localhost
 
