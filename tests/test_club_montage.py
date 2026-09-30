@@ -678,8 +678,10 @@ def test_thirty_second_talking_brief_uses_type_on_the_picture():
     style = caption_style(brief, 1080, 1920)
     assert style["size"] > 16
     assert style["position"] == "two_fifths"
-    assert style["alignment"] == 8
-    assert style["margin_v"] == int(round(1920 * 0.4))
+    assert style["alignment"] == 5
+    assert style["margin_v"] == 0
+    assert style["anchor_y"] == int(round(1920 * 0.6))
+    assert style["anchor_y"] > 1920 / 2
     assert caption_style(brief, 1080, 1920)["color"] == "#FFFFFF"
     assert caption_style(brief, 1080, 1920)["stroke"] == "#000000"
     windows = talking_windows(30)
@@ -783,12 +785,15 @@ def test_talking_title_is_editorial_and_type_stays_white():
     )
     assert "&HFF000000" in script
     assert style["position"] == "two_fifths"
-    assert style["alignment"] == 8
-    assert style["margin_v"] == int(round(1080 * 0.4))
+    assert style["alignment"] == 5
+    assert style["margin_v"] == 0
+    assert style["anchor_y"] == int(round(1080 * 0.6))
+    assert style["anchor_y"] > 1080 / 2
     assert (
         f",1,{style['stroke_width']},0,{style['alignment']},"
         f"40,40,{style['margin_v']},1"
     ) in script
+    assert f"{{\\an5\\pos({1920 // 2},{style['anchor_y']})}}" in script
 
 
 def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
@@ -813,6 +818,7 @@ def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
     )
     assert r"\N" not in script
     assert script.count("Dialogue:") == len(shown)
+    assert script.count(r"\an5\pos(") == len(shown)
     assert len(shown) > 1
     assert "WrapStyle: 2" in script
 
@@ -849,6 +855,7 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
     from modules.club.captions import (
         CAPTION_EM, CAPTION_TYPICAL_CHARS, CAPTION_WIDTH_SHARE, CAPTION_Y_TWO_FIFTHS,
         CaptionCue, caption_cues, caption_style, default_caption_size, render_ass,
+        two_fifths_center_y,
     )
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
     assert brief.caption_position == "two_fifths"
@@ -866,9 +873,12 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
     assert landscape < max(18, int(1080 * 0.055))
     placed = caption_style(brief, 1920, 1080)
     assert placed["position"] == "two_fifths"
-    assert placed["alignment"] == 8
-    assert placed["margin_v"] == int(round(1080 * CAPTION_Y_TWO_FIFTHS))
-    assert placed["margin_v"] / 1080 == pytest.approx(0.4)
+    assert placed["alignment"] == 5
+    assert placed["margin_v"] == 0
+    assert placed["anchor_y"] == two_fifths_center_y(1080)
+    assert placed["anchor_y"] == int(round(1080 * (1 - CAPTION_Y_TWO_FIFTHS)))
+    assert placed["anchor_y"] / 1080 == pytest.approx(0.6)
+    assert placed["anchor_y"] > 1080 / 2
     middle = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: middle\n")
     assert middle.caption_position == "center"
     words = "one two three four five six".split()
@@ -891,11 +901,15 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
         brief, width=1920, height=1080, font_path="",
     )
     assert f"Style: Caption,DejaVu Sans,{caption_style(brief, 1920, 1080)['size']}," in script
-    assert f",8,40,40,{placed['margin_v']},1" in script
+    assert ",5,40,40,0,1" in script
+    assert f"{{\\an5\\pos({1920 // 2},{placed['anchor_y']})}}" in script
 
 
 def test_two_fifths_is_the_talking_default_and_other_positions_still_burn():
-    from modules.club.captions import CaptionCue, caption_anchor, caption_style, render_ass
+    from modules.club.captions import (
+        CaptionCue, caption_anchor, caption_pos_override, caption_style, render_ass,
+        two_fifths_center_y,
+    )
     omitted = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\n")
     assert omitted.caption_position == "two_fifths"
     for spelling in ("two_fifths", "two-fifths", "0.4", "0.40", "2/5"):
@@ -911,26 +925,50 @@ def test_two_fifths_is_the_talking_default_and_other_positions_still_burn():
     assert caption_anchor("top", 720) == (8, 48)
     for height in (720, 1080, 1920):
         align, margin = caption_anchor("two_fifths", height)
-        assert align == 8
-        assert margin == int(round(height * 0.4))
-        assert margin / height == pytest.approx(0.4, abs=0.002)
+        assert align == 5
+        assert margin == 0
+        y = two_fifths_center_y(height)
+        assert y == int(round(height * 0.6))
+        assert y > height / 2
+        assert y / height == pytest.approx(0.6, abs=0.002)
+        assert caption_pos_override("two_fifths", 1080, height) == (
+            f"{{\\an5\\pos({1080 // 2},{y})}}"
+        )
+    assert caption_pos_override("center", 1920, 1080) == ""
+    assert caption_pos_override("bottom", 1920, 1080) == ""
     centered = parse_brief(
         "LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: center\n"
     )
     assert caption_style(centered, 1920, 1080)["alignment"] == 5
     assert caption_style(centered, 1920, 1080)["margin_v"] == 0
+    assert caption_style(centered, 1920, 1080)["anchor_y"] == 0
     script = render_ass(
         [CaptionCue(1.0, 2.0, "we play at four")],
         centered, width=1920, height=1080, font_path="",
     )
     assert ",5,40,40,0,1" in script
+    assert "\\pos" not in script
     assert script.count("Dialogue:") == 1
+    low = render_ass(
+        [CaptionCue(1.0, 2.0, "we play at four")],
+        omitted, width=1920, height=1080, font_path="",
+    )
+    assert f"{{\\an5\\pos({1920 // 2},{two_fifths_center_y(1080)})}}" in low
+    assert ",8,40,40," not in low
     top = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: top\n")
     top_script = render_ass(
         [CaptionCue(1.0, 2.0, "we play at four")],
         top, width=1280, height=720, font_path="",
     )
     assert ",8,40,40,48,1" in top_script
+    assert "\\pos" not in top_script
+    bottom = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: bottom\n")
+    bottom_script = render_ass(
+        [CaptionCue(1.0, 2.0, "we play at four")],
+        bottom, width=1280, height=720, font_path="",
+    )
+    assert ",2,40,40,48,1" in bottom_script
+    assert "\\pos" not in bottom_script
 
 
 def test_quiet_clip_names_keep_a_same_session_mic_and_mark_a_soft_extra():

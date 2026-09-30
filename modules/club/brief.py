@@ -26,11 +26,11 @@ captions, and the call to action sit on the picture: white type, black
 stroke, no filled plate. ``COLORS`` still paints a hype card, not this pack.
 
 Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
-defaults: captions at two-fifths of the frame height from the top
-(``two_fifths``, Y ≈ 0.4 × height), one line at a time, horizontally
-centered, sized so a short cue covers about three quarters of the frame
-width, still smaller than the title. A call to action uses the title's
-look at a slightly smaller size.
+defaults: the center of each caption at two-fifths of the frame height
+up from the bottom (``two_fifths``, Y ≈ 0.6 × height, below the middle),
+one line at a time, horizontally centered, sized so a short cue covers
+about three quarters of the frame width, still smaller than the title.
+A call to action uses the title's look at a slightly smaller size.
 ``CAPTION_POSITION: center`` (``middle`` is the same place), ``bottom``,
 or ``top`` still works. ``0.4``, ``two-fifths``, and ``2/5`` are the
 same place as ``two_fifths``. A non-talking brief that omits the field
