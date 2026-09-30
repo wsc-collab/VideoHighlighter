@@ -62,10 +62,13 @@ A person can choose the lines before anything is cut.
    ```
 
    Those windows are cut in. The ranker still fills whatever is left of
-   `LENGTH`. On a talking cut that fill is high speech, then motion
-   inside those talking windows. A silent or low-motion stretch is not
-   used to close the gap, so a must-include does not leave a pause in
-   the middle. Leave both fields out and the ranker chooses on its own,
+   `LENGTH`. On a talking cut that fill is high speech, then action.
+   A silent or low-motion window ranks at the bottom. It is not placed
+   in the middle of the pack, and it is not used at all while a talking
+   or action window is still available. When the transcript says to
+   pause, hold, or check feet, that window stays up two more seconds
+   so the coaching beat is not cut off on the last word. Leave both
+   fields out and the ranker chooses on its own,
    as before. A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
    `INCLUDE_WINDOWS` file that is not in the folder stops the run.
@@ -186,9 +189,12 @@ time order, so a conversation stays in sequence. The first cut is the
 exception: `TITLE_UNDER` or `OPEN_SCENE` when that match is someone
 talking, otherwise a must-include, otherwise a window with speech. A
 silent still does not play under the title while a talking window is in
-the cut. After any must-include, the ranker fills the rest of `LENGTH`
-with high-speech windows (action breaks the tie). It does not insert a
-silent or low-motion window to make the length. `hype` favours audio peaks
+the cut. After the opener, silent stills go to the end of the pack.
+The ranker fills the rest of `LENGTH` with high-speech windows, then
+action. It does not spend that time on a silent or low-motion window
+while talking or action is still available. A pause, a hold, or
+"check your feet" keeps the picture up for two seconds after the line.
+`hype` favours audio peaks
 and motion. Use it only when you want a highlights cut inside this tool.
 A silent hype montage belongs in CapCut, not here.
 

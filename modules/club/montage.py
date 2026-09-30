@@ -23,14 +23,17 @@ editor. It is not a prompt and it is not caption text.
 ``pick`` (or ``--transcript-only``) writes a transcript and stops, so a
 person can choose lines before anything is cut. ``MUST_INCLUDE`` and
 ``INCLUDE_WINDOWS`` force those moments in. The ranker still fills the
-rest of LENGTH. On a talking cut that fill is high speech, then action
-inside those talking windows. A silent or low-motion window is not
-inserted to close the gap. A kept highlight that is missing from the
-final cut stops the run. With neither field, the ranker chooses on its
-own. Talking playback follows clip name and time, except the opener:
-that cut is the ``TITLE_UNDER`` / ``OPEN_SCENE`` match when the brief
-names who is under the title, otherwise a must-include, otherwise a
-window with speech, so a silent still does not sit under the title.
+rest of LENGTH. On a talking cut that fill is high speech, then action.
+A silent or low-motion window ranks at the bottom and is not used in
+the middle of the pack while talking or action is still available. A
+cue to pause, hold, or check feet holds that window open two more
+seconds so the beat is not cut off. A kept highlight that is missing
+from the final cut stops the run. With neither field, the ranker
+chooses on its own. Talking playback follows clip name and time, except
+the opener: that cut is the ``TITLE_UNDER`` / ``OPEN_SCENE`` match when
+the brief names who is under the title, otherwise a must-include,
+otherwise a window with speech, so a silent still does not sit under
+the title.
 """
 
 from __future__ import annotations
@@ -127,6 +130,10 @@ OPEN_MOTION_FLOOR = 0.05
 # recut tight to the speech instead. Motion ranks action among windows
 # that already clear the floor. It does not rescue a silent window.
 FILL_SPEECH_FLOOR = 0.35
+# Below this, motion is not action. A window under both floors is a silent
+# still: it ranks at the bottom and is not a mid-pack filler while a
+# talking or action window is still available.
+ACTION_FLOOR = 0.15
 FILL_MIN_S = 1.0
 FILL_MAX_S = 8.0
 FILL_GAP_S = 0.6
@@ -405,12 +412,54 @@ def _same_source_overlap(a: Window, b: Window) -> bool:
     return a.source == b.source and a.start < b.end - 1e-3 and b.start < a.end - 1e-3
 
 
+def is_silent_still(window: Window) -> bool:
+    """True when a window is neither talking nor action.
+
+    These rank under every talking or moving window. They are not used to
+    fill the middle of a pack while one of those is still available.
+    """
+    return window.speech < FILL_SPEECH_FLOOR and window.motion < ACTION_FLOOR
+
+
+def _talking_pack_rank(window: Window):
+    """Talking, then action, then score. Silent stills sort last."""
+    dead = 1 if is_silent_still(window) else 0
+    return (
+        dead,
+        -window.speech,
+        -window.motion,
+        -window.score,
+        window.source.casefold(),
+        window.start,
+    )
+
+
+def _skip_silent_filler(window: Window, pool: list[Window], chosen: list[Window]) -> bool:
+    """Skip a silent still when the pack already has, or can still take, talking or action.
+
+    A dead clip is not how the length gets finished once a real window is in
+    the cut, and it is not taken ahead of one that is still available.
+    """
+    if not is_silent_still(window):
+        return False
+    if any(not is_silent_still(kept) for kept in chosen):
+        return True
+    for other in pool:
+        if other is window or is_silent_still(other):
+            continue
+        if any(_same_source_overlap(other, kept) for kept in chosen):
+            continue
+        return True
+    return False
+
+
 def select_windows(
     windows: list[Window],
     min_s: float,
     max_s: float,
     target: float | None = None,
     rank=None,
+    prefer_alive: bool = False,
 ) -> list[Window]:
     """Greedy non-overlapping pick until the middle of the requested range.
 
@@ -423,6 +472,10 @@ def select_windows(
     filler stops where the original brief's midpoint still is. ``rank``
     replaces the score sort. Talking filler uses it so speech, then
     action, leads, and a loud silent window cannot.
+
+    ``prefer_alive`` skips a silent still while a talking or action window
+    is still available, and it will trim that talking window into the
+    leftover room instead of plugging the hole with silence.
     """
     def _by_score(window: Window):
         return (-window.score, window.source.casefold(), window.start)
@@ -435,6 +488,8 @@ def select_windows(
     for window in ranked:
         if any(_same_source_overlap(window, kept) for kept in chosen):
             continue
+        if prefer_alive and _skip_silent_filler(window, windows, chosen):
+            continue
         room = max_s - total
         if room <= 0.05:
             break
@@ -442,8 +497,9 @@ def select_windows(
         if dur <= 0:
             continue
         piece = window
+        alive = prefer_alive and not is_silent_still(window)
         if dur > room + 1e-3:
-            if total >= min_s or room < 1.0:
+            if room < 1.0 or (total >= min_s and not alive):
                 continue
             piece = Window(
                 source=window.source,
@@ -470,12 +526,8 @@ def select_windows(
 
 
 def _talking_fill_rank(window: Window):
-    """Speech first, then action, then the weighted score.
-
-    A loud silent window sorts last among anything that is actually talking.
-    """
-    action = window.motion if window.speech >= FILL_SPEECH_FLOOR else 0.0
-    return (-window.speech, -action, -window.score, window.source.casefold(), window.start)
+    """Speech first, then action. Silent stills sort last, not into the middle."""
+    return _talking_pack_rank(window)
 
 
 def is_talking_fill(window: Window) -> bool:
@@ -698,7 +750,15 @@ def select_with_forced(
     low-motion windows stay out, so a must-include gap is not a pause.
     """
     if not forced:
-        return select_windows(windows, min_s, max_s)
+        if style != "talking":
+            return select_windows(windows, min_s, max_s)
+        pool = list(windows)
+        pool.extend(speech_fill_windows(
+            windows, [], segments_by_source, durations, soft_sources,
+        ))
+        return select_windows(
+            pool, min_s, max_s, rank=_talking_pack_rank, prefer_alive=True,
+        )
     chosen = list(forced)
     total = sum(window.duration for window in chosen)
     midpoint = (min_s + max_s) / 2.0
@@ -710,21 +770,130 @@ def select_with_forced(
             if not any(_same_source_overlap(window, kept) for kept in chosen)
         ]
         rank = None
+        prefer_alive = False
         if style == "talking":
-            pool = [window for window in pool if is_talking_fill(window)]
             pool.extend(speech_fill_windows(
                 windows, chosen, segments_by_source, durations, soft_sources,
             ))
-            rank = _talking_fill_rank
+            rank = _talking_pack_rank
+            prefer_alive = True
         room = max_s - total
         filler_target = midpoint - total
         filler = select_windows(
             pool, filler_target, max(filler_target, room),
-            target=filler_target, rank=rank,
+            target=filler_target, rank=rank, prefer_alive=prefer_alive,
         )
         result = chosen + filler
     assert_forced_windows_kept(forced, result)
     return result
+
+
+def _with_end(window: Window, end: float) -> Window:
+    if abs(window.end - end) <= 0.02:
+        return window
+    return Window(
+        source=window.source,
+        path=window.path,
+        start=window.start,
+        end=end,
+        audio=window.audio,
+        motion=window.motion,
+        speech=window.speech,
+        keyword=window.keyword,
+        keyword_hits=list(window.keyword_hits),
+        score=window.score,
+        trimmed=window.trimmed or end < window.end - 0.02,
+        forced=window.forced,
+        include=window.include,
+        kind=window.kind,
+        heard=window.heard,
+    )
+
+
+def _with_range(window: Window, start: float, end: float) -> Window:
+    if abs(window.start - start) <= 0.02 and abs(window.end - end) <= 0.02:
+        return window
+    return Window(
+        source=window.source,
+        path=window.path,
+        start=start,
+        end=end,
+        audio=window.audio,
+        motion=window.motion,
+        speech=window.speech,
+        keyword=window.keyword,
+        keyword_hits=list(window.keyword_hits),
+        score=window.score,
+        trimmed=True,
+        forced=window.forced,
+        include=window.include,
+        kind=window.kind,
+        heard=window.heard,
+    )
+
+
+def extend_coaching_beats(
+    windows: list[Window],
+    segments_by_source: dict | None,
+    durations: dict | None = None,
+    log_fn=print,
+) -> list[Window]:
+    """Hold a window open two seconds after pause, hold, or check-feet.
+
+    The cut was ending on the last word, so the player never got to do
+    the thing the coach just asked for. A later must-include on the same
+    clip keeps its start; anything else moves out of the way.
+    """
+    from modules.club.pick import extend_coaching_window
+
+    segments_by_source = segments_by_source or {}
+    durations = durations or {}
+    extended: list[Window] = []
+    for window in windows:
+        start, end = extend_coaching_window(
+            window.start,
+            window.end,
+            durations.get(window.source),
+            segments_by_source.get(window.source) or [],
+        )
+        if end > window.end + 0.05:
+            log_fn(
+                f"Holding {window.source} {window.start:.2f}-{end:.2f}s "
+                "so the coaching beat after the cue can land."
+            )
+        extended.append(_with_end(window, end))
+    return _resolve_coaching_overlaps(extended)
+
+
+def _resolve_coaching_overlaps(windows: list[Window], drop_short: bool = True) -> list[Window]:
+    """Keep an extended beat from landing on top of the next cut."""
+    groups: dict[str, list[int]] = {}
+    for index, window in enumerate(windows):
+        groups.setdefault(window.source, []).append(index)
+    drop: set[int] = set()
+    for indexes in groups.values():
+        indexes.sort(key=lambda index: windows[index].start)
+        for pos in range(len(indexes) - 1):
+            prev_i = indexes[pos]
+            next_i = indexes[pos + 1]
+            if prev_i in drop or next_i in drop:
+                continue
+            prev = windows[prev_i]
+            nxt = windows[next_i]
+            if prev.end <= nxt.start + 1e-3:
+                continue
+            if nxt.forced:
+                windows[prev_i] = _with_end(prev, min(prev.end, nxt.start))
+            else:
+                moved = _with_range(nxt, max(nxt.start, prev.end), nxt.end)
+                if drop_short and moved.duration < 0.8:
+                    drop.add(next_i)
+                    continue
+                windows[next_i] = moved
+    return [
+        window for index, window in enumerate(windows)
+        if index not in drop and (window.forced or window.duration >= 0.3)
+    ]
 
 
 def _forced_window(span: ForcedSpan) -> Window:
@@ -745,11 +914,15 @@ def _forced_window(span: ForcedSpan) -> Window:
 
 
 def _windows_match(span: Window, cut: Window) -> bool:
-    """Whether ``cut`` is the forced window, within rounding."""
+    """Whether ``cut`` still contains the forced window.
+
+    The end may move later so a coaching beat can land. The start stays
+    put, and a cut that ends early does not count.
+    """
     return (
         span.source == cut.source
         and abs(span.start - cut.start) <= 0.02
-        and abs(span.end - cut.end) <= 0.02
+        and cut.end >= span.end - 0.02
     )
 
 
@@ -795,7 +968,7 @@ def assert_includes_in_cuts(include_rows: list[dict], cuts: list[Window]) -> Non
         found = any(
             cut.source == source
             and abs(cut.start - start) <= 0.02
-            and abs(cut.end - end) <= 0.02
+            and cut.end >= end - 0.02
             for cut in cuts
         )
         if not found:
@@ -865,10 +1038,29 @@ def _lead_with_talking(ordered: list[Window], scene: str = "") -> list[Window]:
         return ordered
     best = max(_open_tier(window, scene) for window in ordered)
     if best == 0 or _open_tier(ordered[0], scene) == best:
+        lead = ordered
+    else:
+        candidates = [window for window in ordered if _open_tier(window, scene) == best]
+        opener = max(candidates, key=lambda window: (window.speech, window.motion))
+        lead = [opener, *[window for window in ordered if window is not opener]]
+    return _sink_silent_fillers(lead)
+
+
+def _sink_silent_fillers(ordered: list[Window]) -> list[Window]:
+    """Keep silent stills at the bottom of the pack, after talking and action.
+
+    A must-include stays where the opener rules put it. A filler that is
+    neither talking nor moving does not play between those windows, which
+    is the dead clip right after the title.
+    """
+    if len(ordered) < 2:
         return ordered
-    candidates = [window for window in ordered if _open_tier(window, scene) == best]
-    opener = max(candidates, key=lambda window: (window.speech, window.motion))
-    return [opener, *[window for window in ordered if window is not opener]]
+    head, tail = ordered[0], ordered[1:]
+    alive = [window for window in tail if window.forced or not is_silent_still(window)]
+    dead = [window for window in tail if not window.forced and is_silent_still(window)]
+    if not dead:
+        return ordered
+    return [head, *alive, *dead]
 
 
 def playback_order(windows: list[Window], style: str, scene: str = "") -> list[Window]:
@@ -1312,6 +1504,7 @@ def run_club_montage(
         soft_sources=soft_set,
     )
     if brief.style == "talking":
+        selected = extend_coaching_beats(selected, heard, durations, log_fn)
         for window in selected:
             if window.heard:
                 continue
