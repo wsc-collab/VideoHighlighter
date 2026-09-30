@@ -584,7 +584,21 @@ def _filter_path(path: str) -> str:
                 .replace("]", r"\]"))
 
 
-def transcribe_captions(path: str, model: str = "small", log_fn=print) -> dict:
+# ``base`` mis-heard short coaching cues ("finish" as "if I", and a Spanish
+# line). ``small`` is faster and less reliable. ``medium`` is the talking-pack
+# default. ``--whisper-model large-v3`` is the larger step when a take is
+# still muddy. ``--whisper-model small`` is the faster fallback.
+DEFAULT_WHISPER_MODEL = "medium"
+WHISPER_MODEL_HELP = (
+    "Local Whisper model name (default: medium). "
+    "medium is the talking-pack default. "
+    "Use large-v3 when a take is still muddy, or small for a faster pass. "
+    "The name is written on transcript.json, timeline.json, and scores.json. "
+    "Weights stay on this machine."
+)
+
+
+def transcribe_captions(path: str, model: str = DEFAULT_WHISPER_MODEL, log_fn=print) -> dict:
     """Word-timed speech from a local Whisper build.
 
     ``faster-whisper`` when it imports, otherwise ``openai-whisper``.
@@ -592,8 +606,9 @@ def transcribe_captions(path: str, model: str = "small", log_fn=print) -> dict:
     speech check are dropped. The text is whatever the model heard.
 
     Language is English. Leaving it on auto-detect is what turned a short
-    English cue into a Spanish line. ``small`` is the default; ``base``
-    mis-heard short coaching cues.
+    English cue into a Spanish line. ``medium`` is the default; ``base``
+    mis-heard short coaching cues. Pass ``small`` for a faster pass, or
+    ``large-v3`` when ``medium`` is still muddy.
     """
     try:
         from faster_whisper import WhisperModel
