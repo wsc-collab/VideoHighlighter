@@ -1901,9 +1901,10 @@ def test_assemble_fills_the_gap_and_opens_on_title_under(tmp_path):
         row["source"], row["source"], row["start"], row["end"],
         row["audio"], row["motion"], row["speech"], row["keyword"],
     )) for row in fillers)
-    # "hold your finish" keeps two seconds after the line, so the cut can
-    # run slightly past LENGTH. It does not do that with a silent clip.
+    # "hold your finish" keeps two seconds after the line. That time stays
+    # inside LENGTH: the draft does not run long to make room for the beat.
     assert cuts["assembled_seconds"] >= 11
+    assert cuts["assembled_seconds"] <= cuts["length_max_s"] + 0.05
     hold = next(row for row in forced if row["source"] == "a.mp4")
     assert hold["end"] >= 4.0
 
@@ -2228,3 +2229,167 @@ def test_assemble_holds_check_your_feet_and_skips_the_silent_follow(tmp_path):
     assert fillers
     assert all(row["speech"] >= 0.35 or row["motion"] >= 0.15 for row in fillers)
     assert all(row["matched"] and row["kept"] for row in cuts["includes"])
+    assert cuts["assembled_seconds"] <= cuts["length_max_s"] + 0.05
+
+
+def test_setup_hold_trims_fill_instead_of_passing_length():
+    """A pause, hold, check-feet, or foreshadow beat stays inside LENGTH.
+
+    The two seconds are kept when another filler can be tightened to make
+    room. When the hold itself is what would run past the brief, it is not
+    added on top of a cut that is already at LENGTH.
+    """
+    from modules.club.montage import extend_coaching_beats
+
+    def cue_window(source, start, end, *, forced=False):
+        return Window(
+            source, source, start, end, 0.2, 0.3, 0.9, 0,
+            forced=forced, kind="must_include" if forced else "",
+            include="line" if forced else "",
+        )
+
+    watch = [{"start": 3.4, "end": 5.0, "text": "now watch this"}]
+    hold = cue_window("a.mp4", 0.0, 5.0, forced=True)
+    plain = cue_window("b.mp4", 0.0, 10.0)
+    fitted = extend_coaching_beats(
+        [hold, plain],
+        {"a.mp4": watch, "b.mp4": []},
+        {"a.mp4": 30.0, "b.mp4": 30.0},
+        log_fn=lambda *_a, **_k: None,
+        max_s=15.0,
+    )
+    by_source = {window.source: window for window in fitted}
+    assert by_source["a.mp4"].end == pytest.approx(7.0, abs=0.05)
+    assert by_source["b.mp4"].end == pytest.approx(8.0, abs=0.05)
+    assert sum(window.duration for window in fitted) == pytest.approx(15.0, abs=0.05)
+
+    # No other filler to tighten: the foreshadow hold is not stacked on LENGTH.
+    alone = cue_window("a.mp4", 0.0, 15.0, forced=True)
+    finish = [{"start": 13.5, "end": 15.0, "text": "and finish"}]
+    capped = extend_coaching_beats(
+        [alone],
+        {"a.mp4": finish},
+        {"a.mp4": 30.0},
+        log_fn=lambda *_a, **_k: None,
+        max_s=15.0,
+    )
+    assert len(capped) == 1
+    assert capped[0].end == pytest.approx(15.0, abs=0.05)
+    assert capped[0].duration == pytest.approx(15.0, abs=0.05)
+
+    # Room under LENGTH: the beat is still the full two seconds.
+    short = cue_window("a.mp4", 0.0, 5.0, forced=True)
+    room = extend_coaching_beats(
+        [short],
+        {"a.mp4": watch},
+        {"a.mp4": 30.0},
+        log_fn=lambda *_a, **_k: None,
+        max_s=15.0,
+    )
+    assert room[0].end == pytest.approx(7.0, abs=0.05)
+
+
+def test_fifteen_second_talking_cut_stays_on_the_brief(tmp_path):
+    """A setup line at the out-point must not turn LENGTH 15s into ~17s."""
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 15s\nSTYLE: talking\n"
+        "TITLE: Private lesson\n"
+        "MUST_INCLUDE: \"we play at four\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "coach.mp4").write_bytes(b"a")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [{
+            "source": "coach.mp4",
+            "duration_s": 30,
+            "segments": [
+                {"start": 1.0, "end": 2.2, "text": "we play at four"},
+                {
+                    "start": 2.5,
+                    "end": 16.0,
+                    "text": "keep your eye on the ball and watch this",
+                },
+            ],
+        }],
+    }), encoding="utf-8")
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=lambda _p: {"duration": 30.0},
+        peaks=lambda _p: [1, 2, 3, 4],
+        motion=lambda _p, duration: [0.4] * max(1, int(duration)),
+    )
+    assert cuts["length_max_s"] == 15
+    assert cuts["assembled_seconds"] == pytest.approx(15, abs=0.15)
+    assert cuts["assembled_seconds"] < 16
+    assert cuts["within_brief"] is True
+    assert cuts["cuts"]
+    assert any(row.get("forced") for row in cuts["cuts"])
+    assert all(row["matched"] and row["kept"] for row in cuts["includes"])
+
+
+def test_captions_start_the_instant_the_title_clears():
+    """Opener speech still going at the title clear is captioned from then.
+
+    A line whose middle is still under the plate used to be dropped, so the
+    first cue waited for a later word even though someone was talking.
+    """
+    from modules.club.captions import caption_cues, talking_windows
+
+    windows = talking_windows(15, cta=False)
+    title_end = windows["title"][1]
+    body_start, body_end = windows["captions"]
+    assert title_end == pytest.approx(2.5)
+    assert body_start == pytest.approx(title_end)
+
+    # No word times. The middle of the line is under the title, and the
+    # line keeps going after the plate.
+    segment_cues = caption_cues(
+        [{
+            "start": 0.2,
+            "end": 4.0,
+            "text": "keep talking through the title",
+        }],
+        body_start=body_start,
+        body_end=body_end,
+    )
+    assert segment_cues
+    assert segment_cues[0].start == pytest.approx(title_end)
+    assert "talking" in segment_cues[0].text
+    assert all(cue.start >= title_end - 1e-6 for cue in segment_cues)
+
+    # The word in progress at 2.5s has its middle under the title. It is
+    # the first caption, not the word that starts afterwards.
+    word_cues = caption_cues(
+        [{
+            "start": 0.4,
+            "end": 3.4,
+            "text": "keep your the ball",
+            "words": [
+                {"start": 0.4, "end": 1.0, "text": "keep"},
+                {"start": 1.0, "end": 1.6, "text": "your"},
+                {"start": 2.0, "end": 2.8, "text": "the"},
+                {"start": 2.8, "end": 3.4, "text": "ball"},
+            ],
+        }],
+        body_start=body_start,
+        body_end=body_end,
+    )
+    assert word_cues
+    assert word_cues[0].start == pytest.approx(title_end)
+    assert word_cues[0].text.split()[0] == "the"
+    spoken = " ".join(cue.text for cue in word_cues)
+    assert spoken == "the ball"
+    assert "keep" not in spoken
+    assert "your" not in spoken
+
+    # A line that finished before the plate stays off the captions.
+    early = caption_cues(
+        [{"start": 0.2, "end": 2.2, "text": "under the title"}],
+        body_start=body_start,
+        body_end=body_end,
+    )
+    assert early == []

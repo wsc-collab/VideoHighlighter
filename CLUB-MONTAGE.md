@@ -65,11 +65,14 @@ A person can choose the lines before anything is cut.
    `LENGTH`. On a talking cut that fill is high speech, then action.
    A silent or low-motion window ranks at the bottom. It is not placed
    in the middle of the pack, and it is not used at all while a talking
-   or action window is still available.    When the transcript cues a beat — pause, hold, check feet, or the
-   same kind of setup ("watch this", "ready", "here we go", "finish") —
-   that window stays up two more seconds so the cut does not end on the
-   last word. This is the talking default for every clip. `KEYWORDS`
-   do not turn it on. Leave both
+   or action window is still available. When the transcript cues a beat —
+   pause, hold, check feet, or the same kind of setup ("watch this",
+   "ready", "here we go", "finish") — that window stays up two more
+   seconds so the cut does not end on the last word, when those two
+   seconds still fit in `LENGTH`. They do not push the draft past the
+   brief. Other filler is tightened first, and the hold is shortened
+   only when that is the only way to stay on `LENGTH`. This is the
+   talking default for every clip. `KEYWORDS` do not turn it on. Leave both
    fields out and the ranker chooses on its own,
    as before. A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
@@ -224,13 +227,17 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   or Dancing Script when Pacifico is not installed. Both are heavier
   and more readable on a phone than a thin calligraphy face. On a cut
   under about eight seconds the opening shrinks so it cannot cover the
-  captions. Captions stay off until the title ends, then burn as usual.
+  captions. Captions stay off during the title. Speech that is still
+  going when the title clears is captioned from that instant, including
+  a line that began under the title. A line that finished before the
+  title ends stays off.
   Install
   `Inter-Bold.otf` next to Inter when you want the real bold face;
   otherwise the regular face is used.
-- **Captions** for speech whose middle falls between the title and the
-  call to action. Default position is the center of the frame, about four
-  words, one line on screen. The size scales with the frame so a short
+- **Captions** for speech between the title and the call to action.
+  A line still being said when the title clears starts then, not after
+  a delay for the next word. Default position is the center of the frame,
+  about four words, one line on screen. The size scales with the frame so a short
   cue covers about 75% of the width, and stays smaller than the title.
   Type is white with a black stroke and no box. A phrase that would
   overflow is the next timed cue, not a second line. The engine is

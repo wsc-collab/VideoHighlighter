@@ -33,8 +33,10 @@ moving and the transcript claims the whole file is speech. When LENGTH
 still needs time, a must-include grows along the real speech after it
 instead of taking that quiet clip. A setup line (pause, hold, check
 feet, and the same kind of foreshadow: watch, ready, finish, here we
-go) holds that window open two more seconds so the beat is not cut off.
-That hold is the talking default for every clip, not a KEYWORDS match. A
+go) holds that window open two more seconds so the beat is not cut off,
+when that still fits in LENGTH. Past the brief, filler is tightened
+instead of letting the hold run the draft long. That hold is the talking
+default for every clip, not a KEYWORDS match. A
 kept highlight that is missing from the final cut stops the run. With
 neither field, the ranker chooses on its own. Talking playback follows
 clip name and time, except the opener: that cut is the ``TITLE_UNDER``
@@ -1034,11 +1036,86 @@ def _with_range(window: Window, start: float, end: float) -> Window:
     )
 
 
+# A filler may be tightened to this so a setup hold can land inside LENGTH.
+# Shorter than this and the window stops being worth a cut.
+_FILL_FLOOR_S = 0.8
+
+
+def _fit_holds_to_length(
+    planned: list[tuple[Window, float]],
+    max_s: float,
+    log_fn,
+) -> list[tuple[Window, float]]:
+    """Keep pause, hold, check-feet, and foreshadow holds inside LENGTH.
+
+    The two seconds after a setup line are kept when the draft has room.
+    When they would run past ``max_s``, other filler is tightened first so
+    the beat can still land. The hold itself is shortened only after that
+    fill is gone. A forced window is not cut before the span already chosen.
+    """
+    rows = [[window, max(float(end), window.end)] for window, end in planned]
+
+    def total() -> float:
+        return sum(end - window.start for window, end in rows)
+
+    over = total() - float(max_s)
+    if over <= 1e-3:
+        return [(window, end) for window, end in rows]
+
+    def shave(allow, floor_of) -> None:
+        nonlocal over
+        order = sorted(
+            range(len(rows)),
+            key=lambda i: -(rows[i][1] - floor_of(rows[i])),
+        )
+        for index in order:
+            if over <= 1e-3:
+                return
+            window, end = rows[index]
+            if not allow(window, end):
+                continue
+            floor = floor_of(rows[index])
+            spare = end - floor
+            if spare <= 0.02:
+                continue
+            take = min(spare, over)
+            new_end = end - take
+            if take >= 0.05 and new_end < window.end - 0.02:
+                log_fn(
+                    f"Tightening {window.source} {window.start:.2f}-{new_end:.2f}s "
+                    "so a setup hold stays inside LENGTH."
+                )
+            rows[index][1] = new_end
+            over -= take
+
+    def grew(window: Window, end: float) -> bool:
+        return end > window.end + 0.02
+
+    def body_floor(row) -> float:
+        window, end = row
+        return min(end, window.start + _FILL_FLOOR_S)
+
+    def original_end(row) -> float:
+        return min(row[1], row[0].end)
+
+    # Other filler first, so a beat that already fits the picture can stay.
+    shave(
+        lambda window, end: (not window.forced) and (not grew(window, end)),
+        body_floor,
+    )
+    # Then give back only the extra hold that still blows past LENGTH.
+    shave(grew, original_end)
+    # Still long: tighter non-forced windows, hold or not.
+    shave(lambda window, end: not window.forced, body_floor)
+    return [(window, end) for window, end in rows]
+
+
 def extend_coaching_beats(
     windows: list[Window],
     segments_by_source: dict | None,
     durations: dict | None = None,
     log_fn=print,
+    max_s: float | None = None,
 ) -> list[Window]:
     """Hold every talking window open two seconds after a setup line.
 
@@ -1047,19 +1124,28 @@ def extend_coaching_beats(
     on the cue. It runs on every kept clip. Brief KEYWORDS are not
     consulted. A later must-include on the same clip keeps its start;
     anything else moves out of the way.
+
+    ``max_s`` is LENGTH. The hold does not push the draft past it. Filler
+    is tightened first. The hold is shortened when that is the only way
+    to stay on the brief.
     """
     from modules.club.pick import extend_coaching_window
 
     segments_by_source = segments_by_source or {}
     durations = durations or {}
-    extended: list[Window] = []
+    planned: list[tuple[Window, float]] = []
     for window in windows:
-        start, end = extend_coaching_window(
+        _start, end = extend_coaching_window(
             window.start,
             window.end,
             durations.get(window.source),
             segments_by_source.get(window.source) or [],
         )
+        planned.append((window, end))
+    if max_s is not None and max_s > 0:
+        planned = _fit_holds_to_length(planned, float(max_s), log_fn)
+    extended: list[Window] = []
+    for window, end in planned:
         if end > window.end + 0.05:
             log_fn(
                 f"Holding {window.source} {window.start:.2f}-{end:.2f}s "
@@ -1735,7 +1821,9 @@ def run_club_montage(
         log_fn=log_fn,
     )
     if brief.style == "talking":
-        selected = extend_coaching_beats(selected, heard, durations, log_fn)
+        selected = extend_coaching_beats(
+            selected, heard, durations, log_fn, max_s=brief.length_max_s,
+        )
         for window in selected:
             if window.heard:
                 continue
