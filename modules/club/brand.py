@@ -26,6 +26,7 @@ def brand_record(brief: Brief, *, applied: bool = False, error: str | None = Non
         "applied": applied,
         "error": error,
         "title": brief.title,
+        "title_accent": brief.title_accent,
         "subtitle": brief.subtitle,
         "colors": list(brief.colors),
         "font": brief.font,
@@ -110,6 +111,93 @@ def _enable(start: float, end: float) -> str:
     return f"enable='between(t\\,{start:.3f}\\,{end:.3f})'"
 
 
+def split_title_accent(title: str, accent: str) -> list[tuple[str, bool]]:
+    """``(text, is_accent)`` pieces. The accent is the first matching span.
+
+    Matching is case-sensitive first, then case-insensitive, and the span
+    keeps the spelling already in the title. No accent means one plain piece.
+    """
+    text = title or ""
+    needle = (accent or "").strip()
+    if not text:
+        return []
+    if not needle:
+        return [(text, False)]
+    index = text.find(needle)
+    if index < 0:
+        folded = text.casefold()
+        index = folded.find(needle.casefold())
+        if index < 0:
+            return [(text, False)]
+        needle = text[index:index + len(needle)]
+    parts: list[tuple[str, bool]] = []
+    if index:
+        parts.append((text[:index], False))
+    parts.append((needle, True))
+    rest = text[index + len(needle):]
+    if rest:
+        parts.append((rest, False))
+    return parts
+
+
+# Script faces tried, in order, when TITLE_ACCENT is set. The rest of the
+# title stays Inter Bold. None of these are bundled; the first file found
+# on the machine is used.
+_SCRIPT_FAMILIES = (
+    "Great Vibes",
+    "Allura",
+    "Dancing Script",
+    "Segoe Script",
+    "Brush Script MT",
+    "Snell Roundhand",
+    "Apple Chancery",
+    "Lucida Calligraphy",
+)
+_SCRIPT_FILES = (
+    "GreatVibes-Regular.ttf",
+    "GreatVibes-Regular.otf",
+    "Allura-Regular.ttf",
+    "Allura-Regular.otf",
+    "DancingScript-Regular.ttf",
+    "DancingScript-Regular.otf",
+    "Segoe Script.ttf",
+)
+
+
+def resolve_accent_font(log_fn=print, search_dirs=None) -> str:
+    """A script or calligraphy file for ``TITLE_ACCENT``, or ``""``.
+
+    Searches the same folders as Inter, then fontconfig. A missing face
+    is logged; the title still draws, in Inter Bold, with no second face.
+    """
+    directories = list(search_dirs) if search_dirs is not None else club_font_dirs()
+    for folder in directories:
+        for name in _SCRIPT_FILES:
+            candidate = Path(folder) / name
+            if candidate.is_file():
+                return str(candidate.resolve())
+    for family in _SCRIPT_FAMILIES:
+        found = _fontconfig(family)
+        if found:
+            return found
+    log_fn(
+        "No script face for TITLE_ACCENT. Install Great Vibes, Allura, or "
+        "Dancing Script next to Inter. The name stays in Inter Bold."
+    )
+    return ""
+
+
+def _one_line_size(text: str, width: int, font_path: str, size: int) -> int:
+    """Shrink ``size`` until ``text`` fits on one line."""
+    from modules.media.transitions import TEXT_WIDTH, _measurer
+    measure = _measurer(font_path)
+    limit = max(1.0, width * TEXT_WIDTH)
+    size = max(16, int(size))
+    while size > 16 and measure(text, size) > limit:
+        size = max(16, int(size * 0.92))
+    return size
+
+
 def _fitted(text: str, width: int, height: int, font_path: str) -> tuple[str, int]:
     from modules.media.transitions import fit_caption
     lines, size = fit_caption(text, width, height, font_path)
@@ -126,6 +214,7 @@ def brand_filter(
     height: int = 1080,
     windows: dict | None = None,
     centered: bool = False,
+    accent_font: str = "",
 ) -> str:
     """The ffmpeg ``-vf`` graph, or ``""`` when there is nothing to draw.
 
@@ -156,6 +245,14 @@ def brand_filter(
     height = max(2, int(height))
 
     title_text, title_size = _fitted(brief.title, width, height, font_path)
+    # An accented name has to stay on one line. The wrapped fit can split
+    # the name, and then it is no longer the span TITLE_ACCENT named.
+    if centered and any(flag for _piece, flag in split_title_accent(brief.title, brief.title_accent)):
+        title_text = brief.title
+        title_size = _one_line_size(
+            brief.title, width, bold_font(font_path) or font_path,
+            max(title_size, 18),
+        )
     sub_text, sub_size = _fitted(brief.subtitle, width, height, font_path)
     if title_text and sub_text:
         sub_size = min(sub_size, max(16, int(title_size * 0.7)))
@@ -182,31 +279,66 @@ def brand_filter(
         )
 
     # Talking title and CTA: bold white, no stroke, centered on the picture.
-    title_font = _escape_path(bold_font(font_path) if centered else font_path)
+    # A soft shadow sits under the words. It is not a plate and not an outline.
+    title_font_path = bold_font(font_path) if centered else font_path
+    title_font = _escape_path(title_font_path)
+    if centered and (brief.title_accent or "").strip() and not accent_font:
+        accent_font = resolve_accent_font()
+    accent_face = _escape_path(accent_font) if accent_font else ""
+    shadow = ":shadowcolor=black@0.45:shadowx=2:shadowy=3"
 
     def words(text: str, size: int, x: str, y: str, start: float, end: float, *,
-              clean: bool = False) -> None:
+              clean: bool = False, face: str = "", align: bool = True) -> None:
         # ``box=0`` and ``borderw=0`` keep a filled plate and a stroke off
-        # the talking title. ``text_align=center`` centers each line.
-        face = title_font if clean else font
-        extra = ":box=0:borderw=0:text_align=center" if clean else ""
+        # the talking title. The shadow is the only thing behind the words.
+        chosen = face or (title_font if clean else font)
+        extra = ""
+        if clean:
+            extra = ":box=0:borderw=0" + shadow
+            if align:
+                extra += ":text_align=center"
         parts.append(
-            f"drawtext=fontfile='{face}':text='{_escape_text(text)}'"
+            f"drawtext=fontfile='{chosen}':text='{_escape_text(text)}'"
             f":fontcolor=0x{ink}:fontsize={size}:x={x}:y={y}"
             f":line_spacing={max(4, size // 6)}{extra}:{_enable(start, end)}"
         )
+
+    def accented_line(text: str, size: int, y: str, start: float, end: float) -> None:
+        """One centered line. The accent span uses the script face when set."""
+        parts_of = split_title_accent(text, brief.title_accent if centered else "")
+        accented = [flag for _piece, flag in parts_of]
+        if not accent_face or not any(accented) or len(parts_of) <= 1 and not any(accented):
+            words(text, size, "(w-tw)/2", y, start, end, clean=True)
+            return
+        from modules.media.transitions import _measurer
+        measure_body = _measurer(title_font_path)
+        measure_accent = _measurer(accent_font)
+        widths = []
+        for piece, is_accent in parts_of:
+            measure = measure_accent if is_accent else measure_body
+            widths.append(max(1, int(round(measure(piece, size)))))
+        total = sum(widths)
+        cursor = 0
+        for (piece, is_accent), piece_w in zip(parts_of, widths):
+            words(
+                piece, size, f"(w-{total})/2+{cursor}", y, start, end,
+                clean=True, face=accent_face if is_accent else "", align=False,
+            )
+            cursor += piece_w
 
     def centered_block(primary: str, primary_size: int, secondary: str,
                        secondary_size: int, start: float, end: float) -> None:
         if primary and secondary:
             gap = max(8, primary_size // 6)
             block = primary_size + gap + secondary_size
-            words(primary, primary_size, "(w-tw)/2", f"(h-{block})/2", start, end, clean=True)
+            accented_line(primary, primary_size, f"(h-{block})/2", start, end)
             words(secondary, secondary_size, "(w-tw)/2",
                   f"(h-{block})/2+{primary_size + gap}", start, end, clean=True)
         else:
-            words(primary or secondary, primary_size or secondary_size,
-                  "(w-tw)/2", "(h-th)/2", start, end, clean=True)
+            accented_line(
+                primary or secondary, primary_size or secondary_size,
+                "(h-th)/2", start, end,
+            )
 
     title_on, title_off = windows["title"]
     if title_off > title_on and (title_text or sub_text):

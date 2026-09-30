@@ -186,7 +186,7 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
         return [0.0] * 8
 
     def transcribe(path, model, log_fn):
-        assert model == "base"
+        assert model == "small"
         if path.endswith("a.mp4"):
             return [{"start": 1.0, "end": 2.0, "text": "what an ace"}]
         return [{"start": 0.0, "end": 1.0, "text": "back to the place"}]
@@ -228,7 +228,7 @@ def test_run_writes_draft_cuts_and_scores(tmp_path):
     on_disk = json.loads((tmp_path / "cuts.json").read_text(encoding="utf-8"))
     scores = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
     assert on_disk["output"] == "draft.mp4"
-    assert scores["signals"]["whisper"] == "base"
+    assert scores["signals"]["whisper"] == "small"
     assert scores["signals"]["audio_peaks"] is True
     assert scores["signals"]["motion"] is True
     assert scores["draft_written"] is True
@@ -905,6 +905,131 @@ def test_hype_keeps_a_quiet_clip(tmp_path):
     assert {row["source"] for row in cuts["cuts"]} == {"lav.mp4", "phone.mp4"}
     assert cuts["mic_preference"]["dropped"] == []
     assert cuts["mic_preference"]["enabled"] is False
+
+
+def test_no_cta_leaves_the_close_to_captions_and_the_name_is_accented(tmp_path):
+    from modules.club.brand import brand_filter, split_title_accent
+    from modules.club.captions import talking_windows
+    windows = talking_windows(15, cta=False)
+    assert windows["end"] == (0.0, 0.0)
+    assert windows["captions"][1] == pytest.approx(15)
+    brief = parse_brief(
+        "LENGTH: 15s\nSTYLE: talking\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+        "TITLE_ACCENT: John Wang\n"
+        "FONT: Inter\n"
+    )
+    assert brief.cta == ""
+    assert brief.title_accent == "John Wang"
+    assert split_title_accent(brief.title, brief.title_accent) == [
+        ("Private lesson with Coach ", False),
+        ("John Wang", True),
+    ]
+    body = tmp_path / "Inter-Bold.otf"
+    script = tmp_path / "GreatVibes-Regular.ttf"
+    body.write_bytes(b"bold")
+    script.write_bytes(b"script")
+    graph = brand_filter(
+        brief, 15, str(body), 1080, 1920,
+        windows={"title": (0.0, 2.5), "lower": (0.0, 0.0), "end": (0.0, 0.0)},
+        centered=True,
+        accent_font=str(script),
+    )
+    assert "John Wang" in graph
+    assert "Private lesson with Coach " in graph
+    assert "GreatVibes-Regular.ttf" in graph
+    assert "Inter-Bold.otf" in graph
+    assert "shadowcolor=black@0.45" in graph
+    assert "borderw=0" in graph
+    assert "drawbox=" not in graph
+    assert graph.count("drawtext=") == 2
+    plain = parse_brief(
+        "LENGTH: 15s\nSTYLE: talking\nTITLE: Private lesson\nFONT: Inter\n"
+    )
+    plain_graph = brand_filter(
+        plain, 15, str(body), 1080, 1920,
+        windows={"title": (0.0, 2.5), "lower": (0.0, 0.0), "end": (2.5, 5.0)},
+        centered=True,
+    )
+    assert plain_graph.count("drawtext=") == 1
+    assert "shadowcolor=black@0.45" in plain_graph
+
+
+def test_captions_md_is_written_before_the_burn_and_an_edit_is_what_burns(tmp_path):
+    from modules.club.captions import parse_captions_md, render_captions_md, CaptionCue
+    cue = CaptionCue(2.5, 4.2, "hold your finish")
+    text = render_captions_md([cue])
+    assert "hold your finish" in text
+    assert parse_captions_md(text)[0].text == "hold your finish"
+    assert parse_captions_md(text)[0].start == pytest.approx(2.5)
+    edited = "0:03.000–0:05.000\nwe play at four\n"
+    assert parse_captions_md(edited)[0].text == "we play at four"
+
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nTITLE: Match day\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "talk.mp4").write_bytes(b"t")
+    (tmp_path / "captions.md").write_text(edited, encoding="utf-8")
+
+    def caption_transcribe(*_a, **_k):
+        raise AssertionError("an edited captions.md is the burn source")
+
+    def caption_burn(src, dst, brief, duration, cues, log_fn=print):
+        assert [cue.text for cue in cues] == ["we play at four"]
+        assert brief.cta == ""
+        Path(dst).write_bytes(b"edited")
+
+    cuts = run_club_montage(
+        tmp_path,
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0] * 8,
+        transcribe=lambda *_a, **_k: [],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=lambda files, output, log_fn=print: Path(output).write_bytes(b"draft") or output,
+        caption_transcribe=caption_transcribe,
+        caption_burn=caption_burn,
+    )
+    assert cuts["captions"]["source"] == "captions.md"
+    assert cuts["captions"]["cues"][0]["text"] == "we play at four"
+    assert (tmp_path / "captions.md").read_text(encoding="utf-8") == edited
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nTITLE: Match day\nCTA: Book\n",
+        encoding="utf-8",
+    )
+    (fresh / "talk.mp4").write_bytes(b"t")
+    seen = {}
+
+    def transcribe_fresh(path, model, log_fn):
+        seen["model"] = model
+        return {"engine": "test", "segments": [
+            {"start": 3.0, "end": 5.0, "text": "hold your finish"},
+        ]}
+
+    def burn_fresh(src, dst, brief, duration, cues, log_fn=print):
+        seen["cues"] = [cue.text for cue in cues]
+        Path(dst).write_bytes(b"fresh")
+
+    run_club_montage(
+        fresh,
+        whisper_model="medium",
+        probe=lambda _p: {"duration": 8.0},
+        peaks=lambda _p: [],
+        motion=lambda _p, _d: [0] * 8,
+        transcribe=lambda *_a, **_k: [],
+        cut=lambda src, start, end, dst, mode="cpu": Path(dst).write_bytes(b"cut"),
+        combine=lambda files, output, log_fn=print: Path(output).write_bytes(b"draft") or output,
+        caption_transcribe=transcribe_fresh,
+        caption_burn=burn_fresh,
+    )
+    written = (fresh / "captions.md").read_text(encoding="utf-8")
+    assert "hold your finish" in written
+    assert seen["model"] == "medium"
+    assert seen["cues"] == ["hold your finish"]
 
 
 def test_main_py_runs_club_before_the_gui_imports():

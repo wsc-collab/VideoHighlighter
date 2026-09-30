@@ -82,6 +82,7 @@ LENGTH: 20s
 STYLE: talking
 BRAND: tier1
 TITLE: Private lesson with Coach John Wang
+TITLE_ACCENT: John Wang
 FONT: Inter
 KEYWORDS: lesson, finish
 NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.
@@ -103,9 +104,12 @@ CTA: Book a lesson
 Tier 1 display face is named. Do not set Interwald, and do not switch
 Tier 1 to Oswald. An explicit `FONT`
 overrides the brand. John Wang packs are Tier 1, so the face is Inter.
-The title is bold white, horizontally centered, with no stroke and no
-plate. A call to action, when the brief sets one, uses that same look at
-a slightly smaller size. Captions stay one line: white with a black
+The title is bold white Inter, horizontally centered, with a soft shadow
+and no stroke and no plate. `TITLE_ACCENT` is the span that switches to
+a script face (the coach's name). The rest of the line stays Inter Bold.
+A call to action, when the brief sets one, uses the title's look at a
+slightly smaller size. Leave `CTA` out and the close is not a blank card:
+captions run through the end. Captions stay one line: white with a black
 stroke, sized so a short cue of a few words covers about three quarters
 of the frame width, and still smaller than the title. A phrase that
 would overflow becomes the next timed caption, not a second line on
@@ -154,7 +158,8 @@ CAPTION_POSITION: bottom
 | `MUST_INCLUDE` | no | Quoted lines or short moments to force into the cut. Mapped to the transcript. One per line. |
 | `INCLUDE_WINDOWS` | no | `file start-end` ranges to force in. Seconds or `m:ss`. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
-| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Bold white, horizontally centered, no stroke, no plate. Not a line from the transcript. |
+| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Inter Bold, white, centered, soft shadow, no stroke, no plate. Not a line from the transcript. |
+| `TITLE_ACCENT` | no | The span inside `TITLE` drawn in a script face, such as `John Wang`. The rest stays Inter Bold. |
 | `SUBTITLE` | no | Optional second line with the title. Same bold white, no stroke. |
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
 | `BRAND` | no | `tier1` (golf and tennis Tier 1), `wsc`, or `bsc`. Picks the default face when `FONT` is omitted. |
@@ -183,23 +188,32 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
 
 - **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
   seconds. The words are the brief, not a sentence Whisper heard. The
-  type is bold, white, and horizontally centered, with no stroke and no
-  plate. On a cut under about eight seconds that opening shrinks so it
-  cannot cover the captions. Install `Inter-Bold.otf` next to Inter when
-  you want the real bold face; otherwise the regular face is used.
+  type is Inter Bold, white, and horizontally centered, with a soft
+  shadow and no stroke and no plate. `TITLE_ACCENT: John Wang` draws
+  that span in a script face (Great Vibes, Allura, or Dancing Script,
+  whichever is installed). On a cut under about eight seconds that
+  opening shrinks so it cannot cover the captions. Install
+  `Inter-Bold.otf` next to Inter when you want the real bold face;
+  otherwise the regular face is used.
 - **Captions** for speech whose middle falls between the title and the
   call to action. Default position is the center of the frame, about four
   words, one line on screen. The size scales with the frame so a short
   cue covers about 75% of the width, and stays smaller than the title.
   Type is white with a black stroke and no box. A phrase that would
   overflow is the next timed cue, not a second line. The engine is
-  local Whisper: `faster-whisper` when that package is installed,
-  otherwise `openai-whisper` from `requirements.txt`. No caption is sent
-  to a paid API. `--no-whisper` leaves the captions off and does not
-  invent lines to fill them.
+  local Whisper, in English, model `small` unless you pass another.
+  `base` mis-heard short cues. `faster-whisper` is used when that
+  package is installed, otherwise `openai-whisper` from
+  `requirements.txt`. No caption is sent to a paid API.
+  The cues are written to `captions.md` before the burn, and
+  `captions.ass` is the file ffmpeg burns. Edit `captions.md` and run
+  again to burn the correction. Delete `captions.md` to transcribe
+  again. `--no-whisper` leaves the captions off and does not invent
+  lines to fill them, unless `captions.md` is already there.
 - **Call to action** from `CTA`, only when that line is set, for about
   the last 2.5 seconds. Same as the title — bold white, horizontally
-  centered, no stroke, no plate — at a slightly smaller size.
+  centered, soft shadow, no stroke, no plate — at a slightly smaller
+  size. No `CTA` means no end card.
 
 `cuts.json` lists every burned line under `captions.cues` with start, end,
 and text, so you can check the words against the recording. A failed burn
@@ -247,7 +261,7 @@ Clips sit **in that folder**, not in subfolders. `mp4`, `mov`, `m4v`, `mkv`,
 Useful flags:
 
 ```bash
-python -m modules.club ./clips --whisper-model tiny
+python -m modules.club ./clips --whisper-model medium
 python -m modules.club ./clips --no-whisper
 python -m modules.club ./clips --brief ~/briefs/saturday.md --out ~/Desktop/out
 python -m modules.club ./clips --dry-run
@@ -257,6 +271,8 @@ python -m modules.club ./clips --transcript-only
 
 `--dry-run` writes the JSON and does not encode `draft.mp4`.
 `--no-whisper` ranks on audio peaks and motion only.
+`--whisper-model` defaults to `small`. Use `medium` when a take is still
+muddy, or `base` to go back to the smaller model. Caption language is English.
 `pick` and `--transcript-only` write `transcript.md` and `transcript.json`
 and do not assemble a draft. See [Two-step talking pick](#two-step-talking-pick).
 Exit code `0` means a draft plan with at least one cut was written.
@@ -266,7 +282,7 @@ Exit code `2` means the folder or the brief could not be read.
 
 In order of preference:
 
-1. **Local Whisper** (`openai-whisper`, default model `base`). Transcripts stay
+1. **Local Whisper** (`openai-whisper`, default model `small`). Transcripts stay
    on this machine. The first run downloads the model weights into the local
    cache. Keyword hits and speech coverage come from that transcript.
 2. **Audio peaks** (`modules/audio/audio_peaks.py`) for impacts, calls, and
@@ -288,6 +304,7 @@ LENGTH: 30s
 STYLE: talking
 BRAND: tier1
 TITLE: Private lesson with Coach John Wang
+TITLE_ACCENT: John Wang
 FONT: Inter
 KEYWORDS: lesson, clinic
 NOTES: Prefer windows where the coach is speaking. Do not use a spoken line as the title.

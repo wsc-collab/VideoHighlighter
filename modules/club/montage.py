@@ -54,9 +54,16 @@ from modules.club.captions import (
     apply_talking_pack,
     caption_cues,
     caption_record,
+    parse_captions_md,
+    render_captions_md,
     talking_windows,
     transcribe_captions,
 )
+
+# ``base`` mis-heard short coaching cues ("finish" as "if I", and a Spanish
+# line). ``small`` is the talking-pack default. ``--whisper-model medium``
+# is the larger step when a take is still muddy.
+DEFAULT_WHISPER_MODEL = "small"
 
 
 # Stated on every run so a later reader can see what the files are.
@@ -604,16 +611,27 @@ def _burn_talking_pack(
 ) -> None:
     """Title, speech captions, and CTA on a talking cut.
 
-    Caption text is the transcript of ``draft_path``. A missing transcript
-    still draws the title and the call to action. A failed burn leaves the
-    unbranded file in place.
+    Caption text comes from ``captions.md`` when that file is already in
+    the folder, so a corrected cue list is what gets burned. Otherwise
+    Whisper writes ``captions.md`` first and the burn uses that file.
+    A missing transcript still draws the title. A failed burn leaves the
+    unbranded file in place. No call to action means no end card.
     """
-    windows = talking_windows(assembled)
+    windows = talking_windows(assembled, cta=bool((brief.cta or "").strip()))
     body_start, body_end = windows["captions"]
     segments: list = []
     engine = None
     error = None
-    if not use_whisper:
+    source = "speech"
+    md_path = Path(destination) / "captions.md"
+    cues = []
+    if md_path.is_file():
+        cues = parse_captions_md(md_path.read_text(encoding="utf-8"))
+        engine = "captions.md"
+        source = "captions.md"
+        log_fn(f"captions.md: {md_path}")
+        log_fn("Using the captions already in captions.md.")
+    elif not use_whisper:
         engine = "skipped"
         log_fn("Captions skipped. Whisper is off, so no speech was read.")
     else:
@@ -629,8 +647,13 @@ def _burn_talking_pack(
             engine = "error"
             error = str(exc)
             log_fn(f"Caption transcript failed ({exc}). Title and CTA still draw.")
-    cues = caption_cues(segments, body_start=body_start, body_end=body_end)
-    record = caption_record(brief, cues=cues, engine=engine, burned=False, error=error)
+        cues = caption_cues(segments, body_start=body_start, body_end=body_end)
+        md_path.write_text(render_captions_md(cues), encoding="utf-8")
+        log_fn(f"captions.md: {md_path}")
+        log_fn("Edit captions.md, then run again to burn the corrected lines.")
+    record = caption_record(
+        brief, cues=cues, engine=engine, burned=False, error=error, source=source,
+    )
     if not cues and not brief.wants_brand():
         cuts["captions"] = record
         scores["captions"] = record
@@ -644,14 +667,16 @@ def _burn_talking_pack(
         talking_burn(str(draft_path), branded, brief, assembled, cues, log_fn)
         os.replace(branded, draft_path)
         branded = None
-        record = caption_record(brief, cues=cues, engine=engine, burned=True, error=error)
+        record = caption_record(
+            brief, cues=cues, engine=engine, burned=True, error=error, source=source,
+        )
         if brief.wants_brand():
             cuts["brand"] = brand_record(brief, applied=True)
             scores["brand"] = cuts["brand"]
     except Exception as exc:
         record = caption_record(
             brief, cues=cues, engine=engine, burned=False,
-            error=error or str(exc),
+            error=error or str(exc), source=source,
         )
         if brief.wants_brand():
             cuts["brand"] = brand_record(brief, applied=False, error=str(exc))
@@ -671,7 +696,7 @@ def run_club_montage(
     *,
     brief_path: str | Path | None = None,
     out_dir: str | Path | None = None,
-    whisper_model: str = "base",
+    whisper_model: str = DEFAULT_WHISPER_MODEL,
     use_whisper: bool = True,
     dry_run: bool = False,
     log_fn=print,
@@ -1024,7 +1049,7 @@ def run_transcript(
     folder: str | Path,
     *,
     out_dir: str | Path | None = None,
-    whisper_model: str = "base",
+    whisper_model: str = DEFAULT_WHISPER_MODEL,
     log_fn=print,
     probe=None,
     transcribe=None,
@@ -1134,8 +1159,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", help="Output directory (default: the clips folder)")
     parser.add_argument(
         "--whisper-model",
-        default="base",
-        help="Local Whisper model name (default: base). Weights stay on this machine.",
+        default=DEFAULT_WHISPER_MODEL,
+        help=(
+            "Local Whisper model name (default: small). "
+            "Use medium when a take is still muddy. Weights stay on this machine."
+        ),
     )
     parser.add_argument(
         "--no-whisper",

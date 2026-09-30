@@ -72,7 +72,7 @@ REQUIRED = ("LENGTH", "STYLE")
 # point") would otherwise be read as a new key.
 KNOWN_FIELDS = {
     "LENGTH", "STYLE", "KEYWORDS", "NOTES",
-    "TITLE", "SUBTITLE", "COLORS", "FONT", "CTA", "BRAND",
+    "TITLE", "TITLE_ACCENT", "SUBTITLE", "COLORS", "FONT", "CTA", "BRAND",
     "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
     "CAPTION_POSITION", "CAPTION_FONT",
     "MUST_INCLUDE", "INCLUDE_WINDOWS",
@@ -99,6 +99,7 @@ class Brief:
     notes: str
     source: str = ""
     title: str = ""
+    title_accent: str = ""
     subtitle: str = ""
     colors: tuple[str, ...] = ()
     font: str = ""
@@ -128,6 +129,7 @@ class Brief:
             "keywords": list(self.keywords),
             "notes": self.notes,
             "title": self.title,
+            "title_accent": self.title_accent,
             "subtitle": self.subtitle,
             "colors": list(self.colors),
             "font": self.font,
@@ -464,6 +466,7 @@ def parse_brief(text: str, source: str = "") -> Brief:
         notes=fields.get("NOTES", "").strip(),
         source=source,
         title=_one_line(fields.get("TITLE", "")),
+        title_accent=_one_line(fields.get("TITLE_ACCENT", "")),
         subtitle=_one_line(fields.get("SUBTITLE", "")),
         colors=parse_colors(fields.get("COLORS", "")),
         font=_one_line(fields.get("FONT", "")),

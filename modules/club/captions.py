@@ -19,10 +19,11 @@ Neither call leaves the machine.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from modules.club.brief import Brief
 from modules.club.brand import brand_filter, neutral_ink, resolve_font, type_font
@@ -58,18 +59,28 @@ class CaptionCue:
         }
 
 
-def talking_windows(duration: float) -> dict[str, tuple[float, float]]:
+def talking_windows(duration: float, *, cta: bool = True) -> dict[str, tuple[float, float]]:
     """Title, caption body, and end-card spans on the assembled cut.
 
     The lower-third slot is always empty: captions occupy the middle, not
     a second copy of the title. On a very short cut the three spans split
-    the timeline in thirds so they still do not overlap.
+    the timeline in thirds so they still do not overlap. With no call to
+    action the end span stays empty and captions run through the close,
+    so the cut does not finish on a blank card.
     """
     duration = max(0.0, float(duration))
     empty = (0.0, 0.0)
     if duration <= 0:
         return {"title": empty, "lower": empty, "captions": empty, "end": empty}
     plate = TALKING_PLATE_S if duration >= 8 else max(1.0, duration * 0.25)
+    if not cta:
+        title_end = min(plate, duration)
+        return {
+            "title": (0.0, title_end),
+            "lower": empty,
+            "captions": (title_end, duration),
+            "end": empty,
+        }
     if duration < plate * 2 + 0.4:
         third = duration / 3.0
         return {
@@ -426,6 +437,74 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
     return "\n".join(lines) + "\n"
 
 
+_CUE_TIME = re.compile(
+    r"^(?P<start>\d+(?::\d{1,2}){0,2}(?:\.\d+)?)\s*[–—-]\s*"
+    r"(?P<end>\d+(?::\d{1,2}){0,2}(?:\.\d+)?)(?:\s+(?P<text>.*))?$"
+)
+
+
+def render_captions_md(cues) -> str:
+    """A caption list a person can correct before the next burn.
+
+    Each cue is a time range on its own line and the words on the next.
+    One line of words. Title and the call to action are not in this file.
+    """
+    from modules.club.pick import format_timestamp
+    lines = [
+        "# Captions",
+        "",
+        "Edit the words. One cue is a time line, then one line of words.",
+        "Save this file and run the assemble step again to burn it.",
+        "Delete this file to transcribe again.",
+        "",
+    ]
+    for cue in cues or []:
+        start = getattr(cue, "start", None)
+        end = getattr(cue, "end", None)
+        text = getattr(cue, "text", None)
+        if start is None and isinstance(cue, dict):
+            start, end, text = cue.get("start"), cue.get("end"), cue.get("text")
+        lines.append(f"{format_timestamp(float(start))}–{format_timestamp(float(end))}")
+        lines.append(" ".join(str(text or "").split()))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def parse_captions_md(text: str) -> list[CaptionCue]:
+    """Cues from ``captions.md``. Lines that are not a time range are skipped.
+
+    A time line may carry the words on the same line, or on the next line.
+    """
+    from modules.club.brief import parse_clock
+    cues: list[CaptionCue] = []
+    pending: tuple[float, float] | None = None
+    for raw in str(text or "").replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _CUE_TIME.match(line)
+        if match:
+            if pending is not None:
+                cues.append(CaptionCue(pending[0], pending[1], ""))
+            start = parse_clock(match.group("start"))
+            end = parse_clock(match.group("end"))
+            words = " ".join((match.group("text") or "").split())
+            if words:
+                if end > start:
+                    cues.append(CaptionCue(start, end, words))
+                pending = None
+            else:
+                pending = (start, end)
+            continue
+        if pending is None:
+            continue
+        words = " ".join(line.split())
+        if words and pending[1] > pending[0]:
+            cues.append(CaptionCue(pending[0], pending[1], words))
+        pending = None
+    return [cue for cue in cues if cue.text]
+
+
 def _filter_path(path: str) -> str:
     return (path.replace("\\", "/")
                 .replace(":", r"\:")
@@ -435,12 +514,16 @@ def _filter_path(path: str) -> str:
                 .replace("]", r"\]"))
 
 
-def transcribe_captions(path: str, model: str = "base", log_fn=print) -> dict:
+def transcribe_captions(path: str, model: str = "small", log_fn=print) -> dict:
     """Word-timed speech from a local Whisper build.
 
     ``faster-whisper`` when it imports, otherwise ``openai-whisper``.
     Returns ``{"engine", "segments"}``. Segments that fail the app's
     speech check are dropped. The text is whatever the model heard.
+
+    Language is English. Leaving it on auto-detect is what turned a short
+    English cue into a Spanish line. ``small`` is the default; ``base``
+    mis-heard short coaching cues.
     """
     try:
         from faster_whisper import WhisperModel
@@ -449,7 +532,9 @@ def transcribe_captions(path: str, model: str = "base", log_fn=print) -> dict:
     if WhisperModel is not None:
         log_fn(f"Captions: local faster-whisper ({model}).")
         whisper_model = WhisperModel(model, device="cpu", compute_type="int8")
-        segments, _info = whisper_model.transcribe(path, word_timestamps=True)
+        segments, _info = whisper_model.transcribe(
+            path, word_timestamps=True, language="en",
+        )
         return {"engine": "faster-whisper", "segments": _segments_from_faster(segments)}
     log_fn(f"Captions: local openai-whisper ({model}).")
     return {"engine": "whisper", "segments": _segments_from_openai(path, model, log_fn)}
@@ -495,6 +580,7 @@ def _segments_from_openai(path: str, model: str, log_fn) -> list:
     result = loaded.transcribe(
         path,
         word_timestamps=True,
+        language="en",
         verbose=False,
         temperature=0.0,
         condition_on_previous_text=False,
@@ -525,12 +611,12 @@ def _segments_from_openai(path: str, model: str, log_fn) -> list:
 
 
 def caption_record(brief: Brief, *, cues=None, engine=None, burned: bool = False,
-                   error: str | None = None) -> dict:
+                   error: str | None = None, source: str = "speech") -> dict:
     rows = [cue.as_dict() if isinstance(cue, CaptionCue) else cue for cue in (cues or [])]
     return {
         "requested": brief.style == "talking",
         "burned": burned,
-        "source": "speech",
+        "source": source,
         "engine": engine,
         "error": error,
         "count": len(rows),
@@ -542,14 +628,15 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
                        cues: list[CaptionCue], log_fn=print) -> str:
     """Draw the title, the spoken captions, and the call to action.
 
-    One ffmpeg pass. Captions go through an ASS script (libass) with an
-    outline and no box. Title and CTA sit in the middle of the frame on
-    the picture, with a stroke and no filled plate. Raises when ffmpeg
+    One ffmpeg pass. Captions are written to ``captions.ass`` beside the
+    draft and that file is what gets burned. Title and CTA sit in the
+    middle of the frame on the picture: a soft shadow, no stroke, no plate.
+    A brief with no CTA does not draw an end card. Raises when ffmpeg
     fails; the caller keeps the unbranded cut.
     """
     from modules.system.app_paths import ffmpeg_exe
 
-    windows = talking_windows(duration)
+    windows = talking_windows(duration, cta=bool((brief.cta or "").strip()))
     font = ""
     if brief.wants_brand() or cues:
         font = resolve_font(type_font(brief), log_fn=log_fn)
@@ -587,10 +674,11 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
                 "No font for captions. Set FONT or CAPTION_FONT to a .ttf path or a font name."
             )
         script = render_ass(list(cues), brief, width=width, height=height, font_path=font)
-        handle, ass_path = tempfile.mkstemp(suffix=".ass", prefix="vh_cap_")
-        os.close(handle)
+        # Beside the draft, not a temp file, so the burn is the file on disk.
+        ass_path = str(Path(dst).expanduser().resolve().parent / "captions.ass")
         with open(ass_path, "w", encoding="utf-8") as handle:
             handle.write(script)
+        log_fn(f"captions.ass: {ass_path}")
         _face, fontsdir = _font_face(brief, font)
         subtitle = f"subtitles={_filter_path(ass_path)}"
         if fontsdir:
@@ -601,22 +689,22 @@ def apply_talking_pack(src: str, dst: str, brief: Brief, duration: float,
         shutil.copy2(src, dst)
         return dst
 
+    end_on, end_off = windows["end"]
+    cta_note = (
+        f"CTA {end_on:.1f}-{end_off:.1f}s."
+        if end_off > end_on else "no call to action."
+    )
     log_fn(
         f"Talking pack: title {windows['title'][0]:.1f}-{windows['title'][1]:.1f}s, "
-        f"{len(cues)} caption line(s), "
-        f"CTA {windows['end'][0]:.1f}-{windows['end'][1]:.1f}s."
+        f"{len(cues)} caption line(s), {cta_note}"
     )
-    try:
-        result = subprocess.run(
-            [ffmpeg_exe(), "-y", "-v", "error", "-i", src, "-vf", ",".join(graphs),
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-             "-pix_fmt", "yuv420p", "-c:a", "copy", dst],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=900,
-        )
-    finally:
-        if ass_path and os.path.exists(ass_path):
-            os.remove(ass_path)
+    result = subprocess.run(
+        [ffmpeg_exe(), "-y", "-v", "error", "-i", src, "-vf", ",".join(graphs),
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+         "-pix_fmt", "yuv420p", "-c:a", "copy", dst],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=900,
+    )
     if result.returncode != 0 or not os.path.exists(dst) or os.path.getsize(dst) == 0:
         tail = (result.stderr or "").strip().splitlines()
         detail = tail[-1] if tail else "ffmpeg failed"
