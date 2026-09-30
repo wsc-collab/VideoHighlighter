@@ -141,26 +141,34 @@ def split_title_accent(title: str, accent: str) -> list[tuple[str, bool]]:
 
 
 # Script faces tried, in order, when TITLE_ACCENT is set. The rest of the
-# title stays Inter Bold. None of these are bundled; the first file found
+# title stays Inter Bold. Pacifico is a heavy script that stays readable
+# on a phone; Dancing Script is the next, still less flourished than a
+# thin calligraphy face. None of these are bundled; the first file found
 # on the machine is used.
 _SCRIPT_FAMILIES = (
-    "Great Vibes",
-    "Allura",
+    "Pacifico",
     "Dancing Script",
     "Segoe Script",
     "Brush Script MT",
     "Snell Roundhand",
     "Apple Chancery",
     "Lucida Calligraphy",
+    "Great Vibes",
+    "Allura",
 )
 _SCRIPT_FILES = (
+    "Pacifico-Regular.ttf",
+    "Pacifico-Regular.otf",
+    "Pacifico.ttf",
+    "DancingScript-Regular.ttf",
+    "DancingScript-Bold.ttf",
+    "DancingScript-Regular.otf",
+    "DancingScript-VariableFont_wght.ttf",
+    "Segoe Script.ttf",
     "GreatVibes-Regular.ttf",
     "GreatVibes-Regular.otf",
     "Allura-Regular.ttf",
     "Allura-Regular.otf",
-    "DancingScript-Regular.ttf",
-    "DancingScript-Regular.otf",
-    "Segoe Script.ttf",
 )
 
 
@@ -181,21 +189,125 @@ def resolve_accent_font(log_fn=print, search_dirs=None) -> str:
         if found:
             return found
     log_fn(
-        "No script face for TITLE_ACCENT. Install Great Vibes, Allura, or "
-        "Dancing Script next to Inter. The name stays in Inter Bold."
+        "No script face for TITLE_ACCENT. Install Pacifico or Dancing Script "
+        "next to Inter. The name stays in Inter Bold."
     )
     return ""
 
 
-def _one_line_size(text: str, width: int, font_path: str, size: int) -> int:
-    """Shrink ``size`` until ``text`` fits on one line."""
+def _balanced_words(words: list[str], n_lines: int) -> list[str]:
+    """Split ``words`` into ``n_lines`` lines of nearly equal word counts."""
+    if not words:
+        return []
+    n_lines = max(1, min(int(n_lines), len(words)))
+    if n_lines == 1:
+        return [" ".join(words)]
+    counts = [len(words) // n_lines] * n_lines
+    for index in range(len(words) % n_lines):
+        counts[index] += 1
+    lines = []
+    cursor = 0
+    for count in counts:
+        lines.append(" ".join(words[cursor:cursor + count]))
+        cursor += count
+    return [line for line in lines if line]
+
+
+def _word_lines(words: list[str]) -> list[str]:
+    """One line for a short title, two or three when there are more words."""
+    if not words:
+        return []
+    if len(words) <= 3:
+        return [" ".join(words)]
+    if len(words) <= 5:
+        return _balanced_words(words, 2)
+    return _balanced_words(words, 3)
+
+
+def talking_title_lines(title: str, accent: str) -> list[list[tuple[str, bool]]]:
+    """Lines for a talking title. Each line is ``(text, is_accent)`` pieces.
+
+    A long title is two or three lines at a large size. The accent phrase
+    stays together on its own line so the name is not shrunk onto one
+    tiny row with the rest of the sentence. A short title stays one line.
+    """
+    text = " ".join((title or "").split())
+    if not text:
+        return []
+    words: list[tuple[str, bool]] = []
+    for piece, is_accent in split_title_accent(text, accent):
+        for word in piece.split():
+            words.append((word, is_accent))
+    if not words:
+        return []
+    if not any(flag for _word, flag in words):
+        return [[(line, False)] for line in _word_lines([word for word, _flag in words])]
+
+    first = next(index for index, (_word, flag) in enumerate(words) if flag)
+    last = len(words) - 1 - next(
+        index for index, (_word, flag) in enumerate(reversed(words)) if flag
+    )
+    before = [word for word, _flag in words[:first]]
+    accent_words = [word for word, _flag in words[first:last + 1]]
+    after = [word for word, _flag in words[last + 1:]]
+    before_n = 2 if len(before) >= 4 else (1 if before else 0)
+    after_n = 2 if len(after) >= 4 else (1 if after else 0)
+    while before_n + after_n + 1 > 3:
+        if before_n >= after_n and before_n > 1:
+            before_n -= 1
+        elif after_n > 1:
+            after_n -= 1
+        else:
+            break
+    lines: list[list[tuple[str, bool]]] = []
+    for line in _balanced_words(before, before_n):
+        lines.append([(line, False)])
+    lines.append([(" ".join(accent_words), True)])
+    for line in _balanced_words(after, after_n):
+        lines.append([(line, False)])
+    return lines
+
+
+def fit_talking_title_size(
+    lines: list[list[tuple[str, bool]]],
+    width: int,
+    height: int,
+    body_font: str,
+    accent_font: str = "",
+) -> int:
+    """Point size for a multi-line talking title. Large, then shrunk to fit.
+
+    The long edge sets the start so a portrait frame does not inherit a
+    landscape-small size. Shrink only until every line fits the frame
+    width. The floor stays well above a one-line shrink of a long sentence.
+    """
     from modules.media.transitions import TEXT_WIDTH, _measurer
-    measure = _measurer(font_path)
+
+    if not lines:
+        return 0
+    measure_body = _measurer(body_font)
+    measure_accent = _measurer(accent_font) if accent_font else measure_body
     limit = max(1.0, width * TEXT_WIDTH)
-    size = max(16, int(size))
-    while size > 16 and measure(text, size) > limit:
-        size = max(16, int(size * 0.92))
-    return size
+    size = max(64, int(round(max(int(width), int(height)) * 0.062)))
+
+    def line_width(line, point: int) -> float:
+        total = 0.0
+        for text, is_accent in line:
+            measure = measure_accent if is_accent else measure_body
+            total += measure(text, point)
+        return total
+
+    while size > 48:
+        gap = max(10, size // 5)
+        block = size * len(lines) + gap * max(0, len(lines) - 1)
+        fits = all(line_width(line, size) <= limit for line in lines)
+        if fits and block <= height * 0.62:
+            return size
+        nxt = int(size * 0.94)
+        if nxt >= size:
+            break
+        size = nxt
+    return max(48, size)
 
 
 def _fitted(text: str, width: int, height: int, font_path: str) -> tuple[str, int]:
@@ -244,15 +356,22 @@ def brand_filter(
     width = max(2, int(width))
     height = max(2, int(height))
 
-    title_text, title_size = _fitted(brief.title, width, height, font_path)
-    # An accented name has to stay on one line. The wrapped fit can split
-    # the name, and then it is no longer the span TITLE_ACCENT named.
-    if centered and any(flag for _piece, flag in split_title_accent(brief.title, brief.title_accent)):
+    # Talking titles wrap to two or three large lines. The accent phrase
+    # stays on its own line. Hype cards keep the single fitted block.
+    title_lines: list[list[tuple[str, bool]]] = []
+    title_font_path = bold_font(font_path) if centered else font_path
+    title_font = _escape_path(title_font_path)
+    if centered and (brief.title_accent or "").strip() and not accent_font:
+        accent_font = resolve_accent_font()
+    accent_face = _escape_path(accent_font) if accent_font else ""
+    if centered and (brief.title or "").strip():
+        title_lines = talking_title_lines(brief.title, brief.title_accent)
         title_text = brief.title
-        title_size = _one_line_size(
-            brief.title, width, bold_font(font_path) or font_path,
-            max(title_size, 18),
+        title_size = fit_talking_title_size(
+            title_lines, width, height, title_font_path, accent_font,
         )
+    else:
+        title_text, title_size = _fitted(brief.title, width, height, font_path)
     sub_text, sub_size = _fitted(brief.subtitle, width, height, font_path)
     if title_text and sub_text:
         sub_size = min(sub_size, max(16, int(title_size * 0.7)))
@@ -279,13 +398,9 @@ def brand_filter(
         )
 
     # Talking title and CTA: bold white, no stroke, centered on the picture.
-    # A soft shadow sits under the words. It is not a plate and not an outline.
-    title_font_path = bold_font(font_path) if centered else font_path
-    title_font = _escape_path(title_font_path)
-    if centered and (brief.title_accent or "").strip() and not accent_font:
-        accent_font = resolve_accent_font()
-    accent_face = _escape_path(accent_font) if accent_font else ""
-    shadow = ":shadowcolor=black@0.45:shadowx=2:shadowy=3"
+    # The shadow is a little stronger than a 2px 45% drop. It is still not
+    # a plate and not an outline.
+    shadow = ":shadowcolor=black@0.58:shadowx=3:shadowy=4"
 
     def words(text: str, size: int, x: str, y: str, start: float, end: float, *,
               clean: bool = False, face: str = "", align: bool = True) -> None:
@@ -340,9 +455,49 @@ def brand_filter(
                 "(h-th)/2", start, end,
             )
 
+    def draw_pieces(pieces, size: int, y: str, start: float, end: float) -> None:
+        if not pieces or size <= 0:
+            return
+        if len(pieces) == 1:
+            text, is_accent = pieces[0]
+            face = accent_face if is_accent and accent_face else ""
+            words(text, size, "(w-tw)/2", y, start, end, clean=True, face=face)
+            return
+        from modules.media.transitions import _measurer
+        measure_body = _measurer(title_font_path)
+        measure_accent = _measurer(accent_font) if accent_font else measure_body
+        widths = []
+        for text, is_accent in pieces:
+            measure = measure_accent if is_accent else measure_body
+            widths.append(max(1, int(round(measure(text, size)))))
+        total = sum(widths)
+        cursor = 0
+        for (text, is_accent), piece_w in zip(pieces, widths):
+            words(
+                text, size, f"(w-{total})/2+{cursor}", y, start, end,
+                clean=True, face=accent_face if is_accent and accent_face else "",
+                align=False,
+            )
+            cursor += piece_w
+
+    def draw_talking_title(start: float, end: float) -> None:
+        rows = [(pieces, title_size) for pieces in title_lines if pieces and title_size]
+        if sub_text and sub_size:
+            rows.append(([(sub_text, False)], sub_size))
+        if not rows:
+            return
+        gap = max(10, (rows[0][1] or 16) // 5)
+        block = sum(size for _pieces, size in rows) + gap * (len(rows) - 1)
+        y = 0
+        for pieces, size in rows:
+            draw_pieces(pieces, size, f"(h-{block})/2+{y}", start, end)
+            y += size + gap
+
     title_on, title_off = windows["title"]
     if title_off > title_on and (title_text or sub_text):
-        if centered:
+        if centered and title_lines:
+            draw_talking_title(title_on, title_off)
+        elif centered:
             centered_block(title_text, title_size, sub_text, sub_size, title_on, title_off)
         else:
             box(0, 0, "iw", "ih*0.30", title_on, title_off)

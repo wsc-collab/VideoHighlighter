@@ -66,6 +66,9 @@ A person can choose the lines before anything is cut.
    as before. A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
    `INCLUDE_WINDOWS` file that is not in the folder stops the run.
+   A window that was kept and then does not appear in the final cut
+   list stops the run as well. The assemble step does not drop a
+   highlight to make the length.
 
    The assemble step reads `transcript.json` when it is already there, so
    the folder is not transcribed again. `pick` hears every file, including
@@ -105,9 +108,11 @@ CTA: Book a lesson
 Tier 1 display face is named. Do not set Interwald, and do not switch
 Tier 1 to Oswald. An explicit `FONT`
 overrides the brand. John Wang packs are Tier 1, so the face is Inter.
-The title is bold white Inter, horizontally centered, with a soft shadow
-and no stroke and no plate. `TITLE_ACCENT` is the span that switches to
-a script face (the coach's name). The rest of the line stays Inter Bold.
+The title is bold white Inter, horizontally centered, on two or three
+lines at a large size, with a soft shadow and no stroke and no plate.
+`TITLE_ACCENT` is the span that switches to a script face (the coach's
+name), on its own line. Pacifico is preferred; Dancing Script is the
+fallback. The rest stays Inter Bold.
 A call to action, when the brief sets one, uses the title's look at a
 slightly smaller size. Leave `CTA` out and the close is not a blank card:
 captions run through the end. Captions stay one line: white with a black
@@ -159,8 +164,8 @@ CAPTION_POSITION: bottom
 | `MUST_INCLUDE` | no | Quoted lines or short moments to force into the cut. Mapped to the transcript. One per line. |
 | `INCLUDE_WINDOWS` | no | `file start-end` ranges to force in. Seconds or `m:ss`. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
-| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Inter Bold, white, centered, soft shadow, no stroke, no plate. Not a line from the transcript. |
-| `TITLE_ACCENT` | no | The span inside `TITLE` drawn in a script face, such as `John Wang`. The rest stays Inter Bold. |
+| `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Inter Bold, white, centered, two or three large lines, soft shadow, no stroke, no plate. Not a line from the transcript. |
+| `TITLE_ACCENT` | no | The span inside `TITLE` drawn in a script face, such as `John Wang`, on its own line. The rest stays Inter Bold. |
 | `SUBTITLE` | no | Optional second line with the title. Same bold white, no stroke. |
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
 | `BRAND` | no | `tier1` (golf and tennis Tier 1), `wsc`, or `bsc`. Picks the default face when `FONT` is omitted. |
@@ -173,7 +178,10 @@ CAPTION_POSITION: bottom
 | `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
 
 `talking` favours speech and keywords, and plays clips in name order, then
-time order, so a conversation stays in sequence. `hype` favours audio peaks
+time order, so a conversation stays in sequence. The first cut is the
+exception: it is a must-include when the brief named one, otherwise a
+window with speech. A silent still does not play under the title while
+a talking window is in the cut. `hype` favours audio peaks
 and motion. Use it only when you want a highlights cut inside this tool.
 A silent hype montage belongs in CapCut, not here.
 
@@ -189,11 +197,14 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
 
 - **Title** from `TITLE` (and `SUBTITLE`, if you set one) for about 2.5
   seconds. The words are the brief, not a sentence Whisper heard. The
-  type is Inter Bold, white, and horizontally centered, with a soft
-  shadow and no stroke and no plate. `TITLE_ACCENT: John Wang` draws
-  that span in a script face (Great Vibes, Allura, or Dancing Script,
-  whichever is installed). On a cut under about eight seconds that
-  opening shrinks so it cannot cover the captions. Install
+  type is Inter Bold, white, and horizontally centered, in two or three
+  large lines, with a soft shadow and no stroke and no plate.
+  `TITLE_ACCENT: John Wang` draws that span on its own line in Pacifico,
+  or Dancing Script when Pacifico is not installed. Both are heavier
+  and more readable on a phone than a thin calligraphy face. On a cut
+  under about eight seconds the opening shrinks so it cannot cover the
+  captions. Captions stay off until the title ends, then burn as usual.
+  Install
   `Inter-Bold.otf` next to Inter when you want the real bold face;
   otherwise the regular face is used.
 - **Captions** for speech whose middle falls between the title and the

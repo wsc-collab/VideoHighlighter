@@ -734,7 +734,11 @@ def test_talking_title_is_editorial_and_type_stays_white():
         windows={"title": windows["title"], "lower": windows["lower"], "end": windows["end"]},
         centered=True,
     )
-    assert "Private lesson with Coach John Wang" in graph
+    assert "Private lesson" in graph
+    assert "with Coach" in graph
+    assert "John Wang" in graph
+    assert "Private lesson with Coach John Wang" not in graph
+    assert graph.count("drawtext=") == 3
     assert "Hold your finish" not in graph
     assert "drawbox=" not in graph
     assert "box=1" not in graph
@@ -939,6 +943,8 @@ def test_hype_keeps_a_quiet_clip(tmp_path):
 
 
 def test_no_cta_leaves_the_close_to_captions_and_the_name_is_accented(tmp_path):
+    import re
+
     from modules.club.brand import brand_filter, split_title_accent
     from modules.club.captions import talking_windows
     windows = talking_windows(15, cta=False)
@@ -967,13 +973,19 @@ def test_no_cta_leaves_the_close_to_captions_and_the_name_is_accented(tmp_path):
         accent_font=str(script),
     )
     assert "John Wang" in graph
-    assert "Private lesson with Coach " in graph
+    assert "Private lesson" in graph
+    assert "with Coach" in graph
     assert "GreatVibes-Regular.ttf" in graph
     assert "Inter-Bold.otf" in graph
-    assert "shadowcolor=black@0.45" in graph
+    assert "shadowcolor=black@0.58" in graph
+    assert "shadowx=3" in graph
     assert "borderw=0" in graph
     assert "drawbox=" not in graph
-    assert graph.count("drawtext=") == 2
+    # Three large lines, not one line shrunk to fit the whole sentence.
+    assert graph.count("drawtext=") == 3
+    sizes = [int(n) for n in re.findall(r"fontsize=(\d+)", graph)]
+    assert len(sizes) == 3
+    assert min(sizes) >= 72
     plain = parse_brief(
         "LENGTH: 15s\nSTYLE: talking\nTITLE: Private lesson\nFONT: Inter\n"
     )
@@ -983,7 +995,7 @@ def test_no_cta_leaves_the_close_to_captions_and_the_name_is_accented(tmp_path):
         centered=True,
     )
     assert plain_graph.count("drawtext=") == 1
-    assert "shadowcolor=black@0.45" in plain_graph
+    assert "shadowcolor=black@0.58" in plain_graph
 
 
 def test_captions_md_is_written_before_the_burn_and_an_edit_is_what_burns(tmp_path):
@@ -1359,3 +1371,216 @@ def test_a_highlight_in_a_quiet_clip_is_kept(tmp_path):
     assert fillers and {row["source"] for row in fillers} == {"lav.mp4"}
     assert cuts["mic_preference"]["soft"] == ["phone.mp4"]
     assert cuts["mic_preference"]["dropped"] == []
+
+
+def test_talking_title_is_several_large_lines_and_captions_wait(tmp_path):
+    """The name sits on its own line. Captions do not burn during the title."""
+    from modules.club.brand import resolve_accent_font, talking_title_lines
+    from modules.club.captions import caption_cues, talking_windows
+
+    lines = talking_title_lines(
+        "Private lesson with Coach John Wang", "John Wang",
+    )
+    assert lines == [
+        [("Private lesson", False)],
+        [("with Coach", False)],
+        [("John Wang", True)],
+    ]
+    assert 2 <= len(lines) <= 3
+
+    pacifico = tmp_path / "Pacifico-Regular.ttf"
+    dancing = tmp_path / "DancingScript-Regular.ttf"
+    vibes = tmp_path / "GreatVibes-Regular.ttf"
+    pacifico.write_bytes(b"p")
+    dancing.write_bytes(b"d")
+    vibes.write_bytes(b"g")
+    assert resolve_accent_font(search_dirs=[tmp_path]) == str(pacifico.resolve())
+    dancing_only = tmp_path / "only"
+    dancing_only.mkdir()
+    (dancing_only / "DancingScript-Regular.ttf").write_bytes(b"d")
+    (dancing_only / "GreatVibes-Regular.ttf").write_bytes(b"g")
+    assert resolve_accent_font(search_dirs=[dancing_only]).endswith(
+        "DancingScript-Regular.ttf"
+    )
+
+    windows = talking_windows(15, cta=False)
+    title_end = windows["title"][1]
+    assert title_end == pytest.approx(2.5)
+    assert windows["captions"][0] == pytest.approx(title_end)
+    cues = caption_cues(
+        [
+            {"start": 0.2, "end": 2.2, "text": "under the title"},
+            {"start": 2.6, "end": 4.2, "text": "after the title"},
+            {
+                "start": 1.0,
+                "end": 3.5,
+                "text": "spans the boundary",
+                "words": [
+                    {"start": 1.0, "end": 1.8, "text": "spans"},
+                    {"start": 2.6, "end": 3.5, "text": "after"},
+                ],
+            },
+        ],
+        body_start=windows["captions"][0],
+        body_end=windows["captions"][1],
+    )
+    assert cues
+    assert all(cue.start >= title_end - 1e-6 for cue in cues)
+    assert all("under the title" not in cue.text for cue in cues)
+    assert any(cue.text == "after the title" for cue in cues)
+    assert any(cue.text == "after" for cue in cues)
+
+
+def test_talking_opens_on_a_must_include_not_a_silent_filler():
+    """Filename order must not put a still, silent clip under the title."""
+    filler = Window(
+        "IMG_7227.MOV", "IMG_7227.MOV", 0, 6.34,
+        0, 0, 0, 0, score=0.2,
+    )
+    first_must = Window(
+        "IMG_7230.MOV", "IMG_7230.MOV", 1.0, 5.0,
+        0.2, 0.1, 1, 0, score=1,
+        forced=True, include="hold your finish", kind="must_include",
+    )
+    later_must = Window(
+        "IMG_7244.MOV", "IMG_7244.MOV", 2.0, 6.0,
+        0.2, 0.1, 1, 0, score=1,
+        forced=True, include="we play at four", kind="must_include",
+    )
+    ordered = playback_order([filler, later_must, first_must], "talking")
+    assert [window.source for window in ordered] == [
+        "IMG_7230.MOV", "IMG_7227.MOV", "IMG_7244.MOV",
+    ]
+    assert ordered[0].forced is True
+    assert ordered[0].kind == "must_include"
+
+    dead = Window("a.mp4", "a.mp4", 0, 4, 0, 0, 0, 0, score=1)
+    spoken = Window("b.mp4", "b.mp4", 0, 4, 0.1, 0.0, 0.8, 0, score=2)
+    assert [window.source for window in playback_order([dead, spoken], "talking")] == [
+        "b.mp4", "a.mp4",
+    ]
+    # Two silent stills stay in clip order. There is no talking window to lead.
+    other = Window("c.mp4", "c.mp4", 0, 4, 0, 0, 0, 0, score=3)
+    assert [window.source for window in playback_order([other, dead], "talking")] == [
+        "a.mp4", "c.mp4",
+    ]
+
+
+def test_every_kept_include_is_in_the_final_cut_or_the_run_stops():
+    from modules.club.montage import (
+        assert_forced_windows_kept,
+        assert_includes_in_cuts,
+        select_with_forced,
+    )
+
+    forced = [
+        Window(
+            f"clip{index}.mp4", f"clip{index}.mp4", 0, 3,
+            0, 0, 1, 0, forced=True, include=f"line {index}", kind="must_include",
+        )
+        for index in range(4)
+    ]
+    pool = [Window("filler.mp4", "filler.mp4", 0, 8, 0, 0, 0, 0, score=9)]
+    picked = select_with_forced(pool, forced, 8, 8)
+    assert [window.include for window in picked if window.forced] == [
+        "line 0", "line 1", "line 2", "line 3",
+    ]
+    assert_forced_windows_kept(forced, picked)
+    rows = [
+        {
+            "kind": "must_include",
+            "text": window.include,
+            "matched": True,
+            "kept": True,
+            "source": window.source,
+            "start": window.start,
+            "end": window.end,
+        }
+        for window in forced
+    ]
+    assert_includes_in_cuts(rows, picked)
+    # An unmatched quote is listed and does not fail the run.
+    assert_includes_in_cuts(
+        [{"kind": "must_include", "text": "not spoken", "matched": False, "kept": False}],
+        [],
+    )
+    dropped = [window for window in picked if window.source != "clip2.mp4"]
+    with pytest.raises(BriefError, match="missing from the final cut"):
+        assert_includes_in_cuts(rows, dropped)
+    with pytest.raises(BriefError, match="missing from the final cut"):
+        assert_forced_windows_kept(forced, dropped)
+
+
+def test_assemble_opens_on_the_must_include_and_keeps_every_one(tmp_path):
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 12s\nSTYLE: talking\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+        "TITLE_ACCENT: John Wang\n"
+        "FONT: Inter\n"
+        "MUST_INCLUDE:\n"
+        "- IMG_7230.MOV: \"hold your finish\"\n"
+        "- IMG_7244.MOV: \"we play at four\"\n",
+        encoding="utf-8",
+    )
+    for name in ("IMG_7227.MOV", "IMG_7230.MOV", "IMG_7244.MOV"):
+        (tmp_path / name).write_bytes(b"x")
+
+    def words(start, tokens):
+        return [
+            {"start": start + index * 0.4, "end": start + (index + 1) * 0.4, "text": token}
+            for index, token in enumerate(tokens)
+        ]
+
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {"source": "IMG_7227.MOV", "duration_s": 8, "segments": []},
+            {
+                "source": "IMG_7230.MOV",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 1.0,
+                    "end": 2.2,
+                    "text": "hold your finish",
+                    "words": words(1.0, ["hold", "your", "finish"]),
+                }],
+            },
+            {
+                "source": "IMG_7244.MOV",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 3.0,
+                    "end": 4.6,
+                    "text": "we play at four",
+                    "words": words(3.0, ["we", "play", "at", "four"]),
+                }],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def probe(path):
+        return {"duration": 8.0 if str(path).endswith("7227.MOV") else 20.0}
+
+    def motion(path, duration):
+        if str(path).endswith("7227.MOV"):
+            return [0.0] * max(1, int(duration))
+        return [0.2] * max(1, int(duration))
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=probe,
+        peaks=lambda _p: [],
+        motion=motion,
+    )
+    assert cuts["cuts"][0]["source"] == "IMG_7230.MOV"
+    assert cuts["cuts"][0]["play_index"] == 0
+    assert cuts["cuts"][0].get("forced") is True
+    assert cuts["cuts"][0].get("kind") == "must_include"
+    forced = [row for row in cuts["cuts"] if row.get("forced")]
+    assert {row["source"] for row in forced} == {"IMG_7230.MOV", "IMG_7244.MOV"}
+    assert all(row["matched"] and row["kept"] for row in cuts["includes"])
+    filler = [row for row in cuts["cuts"] if row["source"] == "IMG_7227.MOV"]
+    assert not filler or filler[0]["play_index"] > 0
+    assert cuts["brand"]["cta"] == ""
