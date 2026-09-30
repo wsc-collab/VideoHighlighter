@@ -104,6 +104,27 @@ Portable builds, GPU setup, where it writes, and fixing an oversized UI:
 | [Community models](docs/COMMUNITY-MODELS.md) | Install models other people trained, publish your own |
 | [Intel GPU](docs/INTEL-GPU.md) · [AMD GPU](docs/AMD-GPU.md) · [Apple GPU](docs/MAC-GPU.md) | Vendor-specific acceleration |
 | [Remote ollama](docs/OLLAMA-REMOTE.md) | Run the local LLM on another box on your LAN |
+| [Club montages](CLUB-MONTAGE.md) | Clips folder + `brief.md` → `draft.mp4`, `cuts.json`, `scores.json` |
+
+## Club montages
+
+This fork's club path is a talking pack: a folder of real clips and a
+`brief.md` (`LENGTH`, `STYLE: talking`, a who/what `TITLE`, optional
+`CTA`). Title, captions, and the call to action are white or black on
+the picture, with a stroke and no filled plate. It ranks windows with local Whisper,
+audio peaks, and motion, joins a straight cut, then burns a title for the
+opening seconds, captions of what was said, and a call to action at the
+end. Caption words come from the speech. Silent hype montages stay in
+CapCut; this repo does not automate those templates.
+
+```bash
+python -m modules.club "/path/to/clips"
+python main.py --club "/path/to/clips"
+```
+
+The draft is a cut of the files in the folder. The command does not generate
+B-roll, faces, voices, or songs. Setup, the brief schema, Drive staging, and
+the desktop / localhost UI are in **[CLUB-MONTAGE.md](CLUB-MONTAGE.md)**.
 
 ## Pro edition
 
