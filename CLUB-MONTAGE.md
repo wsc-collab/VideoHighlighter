@@ -171,7 +171,7 @@ CAPTION_POSITION: bottom
 | `INCLUDE_WINDOWS` | no | `file start-end` ranges to force in. Seconds or `m:ss`. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
 | `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Inter Bold, white, centered, two or three large lines, soft shadow, no stroke, no plate. Not a line from the transcript. |
-| `TITLE_UNDER` | no | Who is on camera under the title. Alias `OPEN_SCENE`. Not drawn. A talking window whose file name or transcript matches it leads. Example: `John`. |
+| `TITLE_UNDER` | no | Who is on camera under the title. Alias `OPEN_SCENE`. Not drawn. A talking window whose file name or transcript matches it leads. A slash separates alternatives (`John / pink shirt`). A phrase with no slash still has to occur as written. Example: `John`. |
 | `TITLE_ACCENT` | no | The span inside `TITLE` drawn in a script face, such as `John Wang`, on its own line. The rest stays Inter Bold. |
 | `SUBTITLE` | no | Optional second line with the title. Same bold white, no stroke. |
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
@@ -192,7 +192,11 @@ silent still does not play under the title while a talking window is in
 the cut. After the opener, silent stills go to the end of the pack.
 The ranker fills the rest of `LENGTH` with high-speech windows, then
 action. It does not spend that time on a silent or low-motion window
-while talking or action is still available. A pause, a hold, or
+while talking or action is still available. A Whisper line that is digit
+spam or has no words is not speech. A clip whose mean volume is room
+tone cannot fill a gap either, even if that transcript covers the file
+and the picture moves. The extra time comes from the real speech after
+a must-include instead. A pause, a hold, or
 "check your feet" keeps the picture up for two seconds after the line.
 `hype` favours audio peaks
 and motion. Use it only when you want a highlights cut inside this tool.

@@ -26,14 +26,19 @@ person can choose lines before anything is cut. ``MUST_INCLUDE`` and
 rest of LENGTH. On a talking cut that fill is high speech, then action.
 A silent or low-motion window ranks at the bottom and is not used in
 the middle of the pack while talking or action is still available. A
-cue to pause, hold, or check feet holds that window open two more
-seconds so the beat is not cut off. A kept highlight that is missing
-from the final cut stops the run. With neither field, the ranker
-chooses on its own. Talking playback follows clip name and time, except
-the opener: that cut is the ``TITLE_UNDER`` / ``OPEN_SCENE`` match when
-the brief names who is under the title, otherwise a must-include,
-otherwise a window with speech, so a silent still does not sit under
-the title.
+Whisper line that is digit spam or has no words is not speech, so it
+cannot score a window as someone talking. A file whose mean volume is
+room tone cannot fill a talking gap either, even when the picture is
+moving and the transcript claims the whole file is speech. When LENGTH
+still needs time, a must-include grows along the real speech after it
+instead of taking that quiet clip. A cue to pause, hold, or check feet
+holds that window open two more seconds so the beat is not cut off. A
+kept highlight that is missing from the final cut stops the run. With
+neither field, the ranker chooses on its own. Talking playback follows
+clip name and time, except the opener: that cut is the ``TITLE_UNDER``
+/ ``OPEN_SCENE`` match when the brief names who is under the title
+(a slash separates alternatives), otherwise a must-include, otherwise
+a window with speech, so a silent still does not sit under the title.
 """
 
 from __future__ import annotations
@@ -134,6 +139,11 @@ FILL_SPEECH_FLOOR = 0.35
 # still: it ranks at the bottom and is not a mid-pack filler while a
 # talking or action window is still available.
 ACTION_FLOOR = 0.15
+# ffmpeg ``volumedetect`` mean at or below this is room tone, not a soft
+# mic. A phone 18 dB under the boom is still louder and can fill on real
+# speech. A file near -56 dB cannot win a talking gap, even if Whisper
+# covered it and the picture moved.
+SILENCE_MEAN_DB = -50.0
 FILL_MIN_S = 1.0
 FILL_MAX_S = 8.0
 FILL_GAP_S = 0.6
@@ -158,6 +168,9 @@ class Window:
     include: str = ""
     kind: str = ""
     heard: str = ""
+    # False when the file's mean volume is room tone. Motion and a fake
+    # transcript do not make that window a talking fill.
+    audible: bool = True
 
     @property
     def duration(self) -> float:
@@ -320,11 +333,63 @@ def window_mean(series: list[float], start: float, end: float) -> float:
     return acc / covered
 
 
+# A real word is letters, at least two of them. Digits are not words:
+# "1,5,5,5,5" is Whisper filling silence, not someone talking.
+_LETTER_WORD = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
+_FILLER_WORD = re.compile(
+    r"^(?:oh+|ah+|ha+|um+|uh+|hmm+|mm+|mhm+)$",
+    re.IGNORECASE,
+)
+
+
+def is_real_speech_text(text: str) -> bool:
+    """True when transcript text is words, not silence junk.
+
+    Digit spam (``1,5,5,5,5``), a blank line, and filler with no words do
+    not count as someone talking. A short real cue still does. A line that
+    is mostly digits does not become speech because one stray word is in it.
+    """
+    raw = " ".join(str(text or "").split())
+    if len(raw) < 2:
+        return False
+    words = [w for w in _LETTER_WORD.findall(raw) if not _FILLER_WORD.fullmatch(w)]
+    if not words:
+        return False
+    digits = len(re.findall(r"\d", raw))
+    letters = len(re.findall(r"[^\W\d_]", raw, flags=re.UNICODE))
+    if digits >= 4 and digits > letters:
+        return False
+    return True
+
+
+def _real_speech_segments(segments) -> list:
+    return [
+        seg for seg in segments or []
+        if is_real_speech_text(str(seg.get("text") or ""))
+    ]
+
+
+def clip_is_audible(mean_db: float | None) -> bool:
+    """False when a metered file is room tone.
+
+    ``None`` stays audible: a file that could not be metered is not
+    treated as silence.
+    """
+    if mean_db is None:
+        return True
+    return float(mean_db) > SILENCE_MEAN_DB
+
+
 def speech_coverage(segments, start: float, end: float) -> float:
+    """Share of ``[start, end)`` covered by real speech.
+
+    A Whisper segment whose text is digit spam or has no words does not
+    count. One junk line across a whole file is not speech coverage 1.
+    """
     if not segments or end <= start:
         return 0.0
     covered = 0.0
-    for seg in segments:
+    for seg in _real_speech_segments(segments):
         covered += _overlap(start, end, float(seg["start"]), float(seg["end"]))
     return min(1.0, covered / (end - start))
 
@@ -347,7 +412,7 @@ def keyword_hits(segments, start: float, end: float, keywords) -> list[str]:
     if not keywords or not segments:
         return []
     texts = []
-    for seg in segments:
+    for seg in _real_speech_segments(segments):
         if _overlap(start, end, float(seg["start"]), float(seg["end"])) > 0:
             texts.append(str(seg.get("text") or ""))
     haystack = "\n".join(texts).casefold()
@@ -417,7 +482,11 @@ def is_silent_still(window: Window) -> bool:
 
     These rank under every talking or moving window. They are not used to
     fill the middle of a pack while one of those is still available.
+    Room tone is a silent still even when speech was scored at 1 and the
+    picture moved: that score came from a transcript, not from the audio.
     """
+    if not window.audible:
+        return True
     return window.speech < FILL_SPEECH_FLOOR and window.motion < ACTION_FLOOR
 
 
@@ -434,15 +503,23 @@ def _talking_pack_rank(window: Window):
     )
 
 
-def _skip_silent_filler(window: Window, pool: list[Window], chosen: list[Window]) -> bool:
+def _skip_silent_filler(
+    window: Window,
+    pool: list[Window],
+    chosen: list[Window],
+    prior: list[Window] | None = None,
+) -> bool:
     """Skip a silent still when the pack already has, or can still take, talking or action.
 
     A dead clip is not how the length gets finished once a real window is in
     the cut, and it is not taken ahead of one that is still available.
+    ``prior`` is the must-includes already kept, which are not in ``chosen``
+    while filler is being picked.
     """
     if not is_silent_still(window):
         return False
-    if any(not is_silent_still(kept) for kept in chosen):
+    held = [*(prior or ()), *chosen]
+    if any(kept.forced or not is_silent_still(kept) for kept in held):
         return True
     for other in pool:
         if other is window or is_silent_still(other):
@@ -460,6 +537,7 @@ def select_windows(
     target: float | None = None,
     rank=None,
     prefer_alive: bool = False,
+    prior: list[Window] | None = None,
 ) -> list[Window]:
     """Greedy non-overlapping pick until the middle of the requested range.
 
@@ -475,7 +553,9 @@ def select_windows(
 
     ``prefer_alive`` skips a silent still while a talking or action window
     is still available, and it will trim that talking window into the
-    leftover room instead of plugging the hole with silence.
+    leftover room instead of plugging the hole with silence. ``prior``
+    counts as already kept, so a must-include blocks a silent filler even
+    though that filler is chosen from its own pool.
     """
     def _by_score(window: Window):
         return (-window.score, window.source.casefold(), window.start)
@@ -488,7 +568,7 @@ def select_windows(
     for window in ranked:
         if any(_same_source_overlap(window, kept) for kept in chosen):
             continue
-        if prefer_alive and _skip_silent_filler(window, windows, chosen):
+        if prefer_alive and _skip_silent_filler(window, windows, chosen, prior):
             continue
         room = max_s - total
         if room <= 0.05:
@@ -517,6 +597,7 @@ def select_windows(
                 include=window.include,
                 kind=window.kind,
                 heard=window.heard,
+                audible=window.audible,
             )
         chosen.append(piece)
         total += piece.duration
@@ -535,8 +616,11 @@ def is_talking_fill(window: Window) -> bool:
 
     High speech qualifies on its own. Action (motion) ranks those windows
     but does not admit a silent swing. A window under the speech floor is
-    the silent or low-motion pause and stays out.
+    the silent or low-motion pause and stays out. Room tone does not fill
+    even when speech coverage was scored at 1.
     """
+    if not window.audible:
+        return False
     return window.speech >= FILL_SPEECH_FLOOR
 
 
@@ -570,6 +654,8 @@ def _free_ranges(duration: float, blocked: list[tuple[float, float]]) -> list[tu
 def _text_between(segments, start: float, end: float) -> str:
     parts = []
     for seg in segments or []:
+        if not is_real_speech_text(str(seg.get("text") or "")):
+            continue
         if _overlap(start, end, float(seg.get("start") or 0), float(seg.get("end") or 0)) <= 0:
             continue
         text = " ".join(str(seg.get("text") or "").split())
@@ -598,7 +684,7 @@ def _nearest_scored(source: str, start: float, end: float, windows: list[Window]
 
 def _speech_runs(segments, free: list[tuple[float, float]]) -> list[tuple[float, float]]:
     pieces: list[tuple[float, float]] = []
-    for seg in segments or []:
+    for seg in _real_speech_segments(segments):
         start = float(seg.get("start") or 0)
         end = float(seg.get("end") or start)
         if end <= start:
@@ -666,6 +752,7 @@ def speech_fill_windows(
     segments_by_source: dict | None,
     durations: dict | None = None,
     soft_sources: set | None = None,
+    inaudible_sources: set | None = None,
 ) -> list[Window]:
     """Tight talking windows in the time must-includes left open.
 
@@ -677,6 +764,7 @@ def speech_fill_windows(
         return []
     durations = durations or {}
     soft = soft_sources or set()
+    quiet = inaudible_sources or set()
     found: list[Window] = []
     sources = set(segments_by_source) | {window.source for window in windows}
     for source in sources:
@@ -721,10 +809,104 @@ def speech_fill_windows(
                 keyword_hits=hits,
                 score=score,
                 heard=_text_between(segments, start, end),
+                audible=source not in quiet,
             )
             if is_talking_fill(window):
                 found.append(window)
     return found
+
+
+def _speech_extend_limit(window: Window, windows: list[Window], duration: float | None) -> float:
+    """How far ``window`` may grow without crossing the next cut or the file."""
+    limit = None
+    if duration and duration > window.end:
+        limit = float(duration)
+    for other in windows:
+        if other is window or other.source != window.source:
+            continue
+        if other.start >= window.end - 1e-3:
+            limit = other.start if limit is None else min(limit, other.start)
+    if limit is None:
+        return window.end
+    return limit
+
+
+def _chain_speech_end(end: float, segments, limit: float, target: float) -> float:
+    """Walk ``end`` forward through real speech that sits against it.
+
+    A gap bigger than ``FILL_GAP_S`` stops the walk. The end stays inside
+    ``limit`` and does not pass ``target``.
+    """
+    cursor = end
+    cap = min(limit, target)
+    if cap <= cursor + 0.02:
+        return end
+    progressed = True
+    while progressed and cursor < cap - 0.02:
+        progressed = False
+        for seg in segments:
+            start = float(seg.get("start") or 0)
+            stop = float(seg.get("end") or start)
+            if stop <= cursor + 0.02:
+                continue
+            if start > cursor + FILL_GAP_S + 1e-6:
+                continue
+            nxt = min(cap, stop + FILL_PAD_S)
+            if nxt > cursor + 0.02:
+                cursor = nxt
+                progressed = True
+    return cursor
+
+
+def extend_forced_along_speech(
+    windows: list[Window],
+    segments_by_source: dict | None,
+    durations: dict | None,
+    need_s: float,
+    log_fn=None,
+    inaudible_sources: set | None = None,
+) -> list[Window]:
+    """Grow must-includes along the real speech that follows them.
+
+    LENGTH padding comes from that speech. A later quiet clip is not how
+    the gap is filled. The start stays put so the forced window still
+    matches. Growth stops at the next cut on the same file, at the end of
+    the speech, or once ``need_s`` is covered. A room-tone file is not
+    grown: the must-include stays, and the silence after it does not.
+    """
+    if need_s <= 0.05 or not segments_by_source:
+        return windows
+    log_fn = log_fn or (lambda *_a, **_k: None)
+    durations = durations or {}
+    quiet = inaudible_sources or set()
+    result = list(windows)
+    order = sorted(
+        range(len(result)),
+        key=lambda i: (result[i].source.casefold(), result[i].start),
+    )
+    remaining = need_s
+    for index in order:
+        if remaining <= 0.05:
+            break
+        window = result[index]
+        if window.kind != "must_include" or not window.audible:
+            continue
+        if window.source in quiet:
+            continue
+        segments = _real_speech_segments(segments_by_source.get(window.source) or [])
+        if not segments:
+            continue
+        limit = _speech_extend_limit(window, result, durations.get(window.source))
+        new_end = _chain_speech_end(window.end, segments, limit, window.end + remaining)
+        if new_end <= window.end + 0.05:
+            continue
+        log_fn(
+            f"Extending {window.source} {window.start:.2f}-{new_end:.2f}s "
+            "along the speech after the must-include."
+        )
+        result[index] = _with_end(window, new_end)
+        remaining -= new_end - window.end
+    return result
 
 
 def select_with_forced(
@@ -737,6 +919,8 @@ def select_with_forced(
     segments_by_source: dict | None = None,
     durations: dict | None = None,
     soft_sources: set | None = None,
+    inaudible_sources: set | None = None,
+    log_fn=None,
 ) -> list[Window]:
     """Keep every highlighted window, then fill toward the brief's midpoint.
 
@@ -748,6 +932,9 @@ def select_with_forced(
     A talking brief still fills what the highlights did not cover. The
     filler has to be high speech (action breaks the tie). Silent and
     low-motion windows stay out, so a must-include gap is not a pause.
+    Room tone stays out even when its transcript says the file is all
+    speech. A must-include is extended along the real speech after it
+    before any other filler is considered.
     """
     if not forced:
         if style != "talking":
@@ -755,6 +942,7 @@ def select_with_forced(
         pool = list(windows)
         pool.extend(speech_fill_windows(
             windows, [], segments_by_source, durations, soft_sources,
+            inaudible_sources,
         ))
         return select_windows(
             pool, min_s, max_s, rank=_talking_pack_rank, prefer_alive=True,
@@ -762,6 +950,14 @@ def select_with_forced(
     chosen = list(forced)
     total = sum(window.duration for window in chosen)
     midpoint = (min_s + max_s) / 2.0
+    if style == "talking" and total < midpoint - 1e-6 and total < max_s - 0.05:
+        chosen = extend_forced_along_speech(
+            chosen, segments_by_source, durations,
+            min(midpoint, max_s) - total,
+            log_fn=log_fn,
+            inaudible_sources=inaudible_sources,
+        )
+        total = sum(window.duration for window in chosen)
     if total >= midpoint - 1e-6 or total >= max_s - 0.05:
         result = chosen
     else:
@@ -774,6 +970,7 @@ def select_with_forced(
         if style == "talking":
             pool.extend(speech_fill_windows(
                 windows, chosen, segments_by_source, durations, soft_sources,
+                inaudible_sources,
             ))
             rank = _talking_pack_rank
             prefer_alive = True
@@ -782,6 +979,7 @@ def select_with_forced(
         filler = select_windows(
             pool, filler_target, max(filler_target, room),
             target=filler_target, rank=rank, prefer_alive=prefer_alive,
+            prior=chosen if prefer_alive else None,
         )
         result = chosen + filler
     assert_forced_windows_kept(forced, result)
@@ -807,6 +1005,7 @@ def _with_end(window: Window, end: float) -> Window:
         include=window.include,
         kind=window.kind,
         heard=window.heard,
+        audible=window.audible,
     )
 
 
@@ -829,6 +1028,7 @@ def _with_range(window: Window, start: float, end: float) -> Window:
         include=window.include,
         kind=window.kind,
         heard=window.heard,
+        audible=window.audible,
     )
 
 
@@ -991,15 +1191,29 @@ def _scene_text(window: Window) -> str:
     )
 
 
+def _scene_needles(scene: str) -> list[str]:
+    """Phrases ``TITLE_UNDER`` can match.
+
+    A slash splits alternatives (``John / pink shirt``). A phrase with no
+    slash stays one phrase, so a description still has to occur as written.
+    """
+    needles = []
+    for piece in re.split(r"[/／]", scene or ""):
+        needle = " ".join(piece.casefold().split())
+        if needle:
+            needles.append(needle)
+    return needles
+
+
 def _scene_hit(window: Window, scene: str) -> bool:
     """Whether ``scene`` names this window's file or what was said in it."""
-    needle = " ".join((scene or "").casefold().split())
-    if not needle:
-        return False
     haystack = _scene_text(window).casefold()
     if not haystack:
         return False
-    return re.search(r"\b" + re.escape(needle) + r"\b", haystack) is not None
+    for needle in _scene_needles(scene):
+        if re.search(r"\b" + re.escape(needle) + r"\b", haystack):
+            return True
+    return False
 
 
 def _scene_can_lead(window: Window) -> bool:
@@ -1351,6 +1565,7 @@ def run_club_montage(
     loudness_fn = loudness or measure_mean_volume_db
     soft_quiet: list[str] = []
     volumes: dict[str, float | None] = {}
+    inaudible: set[str] = set()
     if brief.style == "talking" and len(clips) > 1:
         readings = []
         for path in clips:
@@ -1361,6 +1576,8 @@ def run_club_montage(
                 db = None
             volumes[path.name] = None if db is None else round(float(db), 1)
             readings.append((path.name, db))
+            if not clip_is_audible(db):
+                inaudible.add(path.name)
         soft_quiet = quiet_clip_names(readings)
     soft_set = set(soft_quiet)
     mic_mode = "off" if brief.style != "talking" else ("mixed" if soft_quiet else "same_session")
@@ -1403,6 +1620,11 @@ def run_club_montage(
                     f"{MIXED_GAP_DB:g} dB or more under the loudest clip "
                     f"({loudest} dB). Kept, with a small score haircut."
                 )
+        for name in sorted(inaudible, key=str.casefold):
+            log_fn(
+                f"  {name}: mean volume {volumes[name]} dB is at or below "
+                f"{SILENCE_MEAN_DB:g} dB, so it cannot fill a talking gap."
+            )
 
     saved_payload = load_transcript(destination / "transcript.json")
     saved_rows = {
@@ -1463,6 +1685,9 @@ def run_club_montage(
             if path.name in soft_set:
                 for window in found:
                     window.score *= MIC_SOFT_FACTOR
+            if path.name in inaudible:
+                for window in found:
+                    window.audible = False
             windows.extend(found)
             log_fn(f"  {path.name}: {duration:.1f}s, {len(found)} windows")
         except Exception as exc:
@@ -1502,6 +1727,8 @@ def run_club_montage(
         segments_by_source=heard,
         durations=durations,
         soft_sources=soft_set,
+        inaudible_sources=inaudible,
+        log_fn=log_fn,
     )
     if brief.style == "talking":
         selected = extend_coaching_beats(selected, heard, durations, log_fn)

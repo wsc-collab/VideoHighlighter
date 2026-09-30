@@ -48,8 +48,10 @@ windows. When both are empty, the ranker chooses on its own.
 ``TITLE_UNDER`` (alias ``OPEN_SCENE``) names who is on camera under the
 title. The words are the operator's, a name or a short description of
 that person. They are not drawn. A talking window whose file name or
-transcript contains them leads. A description that was never said, and
-does not match a file name, leaves the opener as it was.
+transcript contains them leads. A slash separates alternatives
+(``John / pink shirt``), and any one of them is enough. A phrase with
+no slash still has to occur as written. A description that was never
+said, and does not match a file name, leaves the opener as it was.
 """
 
 from __future__ import annotations
