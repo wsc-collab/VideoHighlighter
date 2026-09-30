@@ -102,12 +102,18 @@ def _word_text(word: dict) -> str:
     return " ".join(str(word.get("text") or word.get("word") or "").split())
 
 
-def _clip_pair(start: float, end: float, body_start: float, body_end: float):
-    start = max(float(start), body_start)
-    end = min(float(end), body_end)
-    if end - start < 0.2:
+def _body_slice(start: float, end: float, body_start: float, body_end: float):
+    """Portion of a span that falls inside the caption body.
+
+    Speech that began under the title and is still going when the plate
+    clears keeps the overlapping tail. The visible start is the plate, so
+    the burned cue begins the instant the title ends.
+    """
+    lo = max(float(start), float(body_start))
+    hi = min(float(end), float(body_end))
+    if hi - lo < 1e-3:
         return None
-    return start, end
+    return lo, hi
 
 
 def _split_timed(text: str, start: float, end: float, max_chars: int,
@@ -153,12 +159,15 @@ def _cues_from_words(words, body_start: float, body_end: float,
         except (KeyError, TypeError, ValueError):
             continue
         midpoint = (start + end) / 2.0
-        if midpoint < body_start or midpoint >= body_end:
+        # A word still in progress at the title clear has its middle under
+        # the plate. Dropping it on that middle is what left a gap after
+        # the title even though someone was talking.
+        if end <= body_start or midpoint >= body_end:
             continue
-        clipped = _clip_pair(start, end, body_start, body_end)
+        clipped = _body_slice(start, end, body_start, body_end)
         if clipped is None:
-            clipped = (max(start, body_start), max(end, body_start))
-        kept.append((clipped[0], max(clipped[1], clipped[0]), text))
+            continue
+        kept.append((clipped[0], clipped[1], text))
     cues: list[CaptionCue] = []
     bucket: list[tuple[float, float, str]] = []
 
@@ -195,8 +204,11 @@ def caption_cues(
     A segment may carry ``words`` (``start``, ``end``, ``text`` or ``word``).
     Without words, the segment text is split across its own time span and
     clipped to the body between the title and the call to action. Lines
-    outside that body are dropped. No line is added that the transcript
-    did not contain.
+    that finish before the title, or start on the end card, are dropped.
+    A line that began under the title and is still going when the plate
+    clears is kept, and the cue starts at that instant rather than waiting
+    for the next word that begins after the title. No line is added that
+    the transcript did not contain.
     """
     if body_end <= body_start:
         return []
@@ -217,14 +229,17 @@ def caption_cues(
         except (KeyError, TypeError, ValueError):
             continue
         midpoint = (start + end) / 2.0
-        if midpoint < body_start or midpoint >= body_end:
+        if end <= body_start or midpoint >= body_end:
             continue
-        clipped = _clip_pair(start, end, body_start, body_end)
+        clipped = _body_slice(start, end, body_start, body_end)
         if clipped is None:
             continue
-        for line, line_start, line_end in _split_timed(
+        lines = list(_split_timed(
             text, clipped[0], clipped[1], max_chars, max_words,
-        ):
+        ))
+        if not lines:
+            lines = [(text, clipped[0], clipped[1])]
+        for line, line_start, line_end in lines:
             cues.append(CaptionCue(line_start, line_end, line))
     return cues
 
