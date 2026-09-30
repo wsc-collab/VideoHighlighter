@@ -65,9 +65,11 @@ A person can choose the lines before anything is cut.
    `LENGTH`. On a talking cut that fill is high speech, then action.
    A silent or low-motion window ranks at the bottom. It is not placed
    in the middle of the pack, and it is not used at all while a talking
-   or action window is still available. When the transcript says to
-   pause, hold, or check feet, that window stays up two more seconds
-   so the coaching beat is not cut off on the last word. Leave both
+   or action window is still available.    When the transcript cues a beat — pause, hold, check feet, or the
+   same kind of setup ("watch this", "ready", "here we go", "finish") —
+   that window stays up two more seconds so the cut does not end on the
+   last word. This is the talking default for every clip. `KEYWORDS`
+   do not turn it on. Leave both
    fields out and the ranker chooses on its own,
    as before. A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
@@ -196,8 +198,10 @@ while talking or action is still available. A Whisper line that is digit
 spam or has no words is not speech. A clip whose mean volume is room
 tone cannot fill a gap either, even if that transcript covers the file
 and the picture moves. The extra time comes from the real speech after
-a must-include instead. A pause, a hold, or
-"check your feet" keeps the picture up for two seconds after the line.
+a must-include instead. A setup line keeps the picture up for two
+seconds after the words: pause, hold, check feet, and the same kind of
+foreshadow (watch, ready, finish, here we go). Every talking clip gets
+that hold. `KEYWORDS` only affect which windows rank higher.
 `hype` favours audio peaks
 and motion. Use it only when you want a highlights cut inside this tool.
 A silent hype montage belongs in CapCut, not here.

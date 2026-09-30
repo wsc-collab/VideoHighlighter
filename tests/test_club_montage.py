@@ -2074,6 +2074,105 @@ def test_check_your_feet_and_pause_hold_the_beat():
     assert extend_coaching_window(0.75, 2.25, 20.0, plain) == (0.75, 2.25)
 
 
+def test_setup_lines_hold_the_beat_like_pause_hold_and_feet():
+    """Foreshadow gets the same two seconds. An ordinary line does not."""
+    from modules.club.pick import extend_coaching_window
+
+    def cue(text, start=1.0, end=2.4):
+        return [{"start": start, "end": end, "text": text}]
+
+    for text in (
+        "watch this",
+        "here we go",
+        "show me",
+        "get ready",
+        "your turn",
+        "one more",
+        "and finish",
+        "let's see",
+        "right there",
+        "follow through",
+        "set up",
+        "wait there",
+        "stay",
+        "freeze",
+        "try again",
+        "don't move",
+        "balance",
+    ):
+        _start, end = extend_coaching_window(0.75, 2.65, 20.0, cue(text))
+        assert end == pytest.approx(4.4, abs=0.05), text
+
+    # The words are not brief KEYWORDS. A line with none of the cues stays put.
+    plain = [{"start": 1.0, "end": 2.0, "text": "we play at four on saturday"}]
+    assert extend_coaching_window(0.75, 2.25, 20.0, plain) == (0.75, 2.25)
+
+
+def test_talking_extends_a_setup_line_with_no_keywords(tmp_path):
+    """Every talking clip holds the beat. KEYWORDS are not required."""
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nTITLE: Lesson\n"
+        "MUST_INCLUDE: \"watch this\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "coach.mp4").write_bytes(b"a")
+    (tmp_path / "still.mp4").write_bytes(b"b")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {
+                "source": "coach.mp4",
+                "duration_s": 20,
+                "segments": [
+                    {"start": 1.0, "end": 1.8, "text": "watch this"},
+                    {"start": 8.0, "end": 8.8, "text": "here we go"},
+                ],
+            },
+            {
+                "source": "still.mp4",
+                "duration_s": 8,
+                "segments": [{
+                    "start": 0.0,
+                    "end": 8.0,
+                    "text": "1,5,5,5,5,5,5,5,5,5",
+                }],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def motion(path, duration):
+        n = max(1, int(duration))
+        if str(path).endswith("still.mp4"):
+            return [0.8] * n
+        return [0.4] * n
+
+    def loudness(path):
+        return -56.0 if str(path).endswith("still.mp4") else -18.0
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=lambda path: {"duration": 8.0 if str(path).endswith("still.mp4") else 20.0},
+        peaks=lambda _p: [1, 2, 3],
+        motion=motion,
+        loudness=loudness,
+    )
+    cue = next(row for row in cuts["cuts"] if row.get("forced"))
+    assert cue["source"] == "coach.mp4"
+    assert "watch this" in cue["include"]
+    # Quote ends at 1.8s. The beat holds two seconds past that line.
+    assert cue["end"] == pytest.approx(3.8, abs=0.15)
+    follow = [
+        row for row in cuts["cuts"]
+        if row["source"] == "coach.mp4" and 7 <= row["start"] <= 9
+    ]
+    assert len(follow) == 1
+    assert follow[0]["end"] == pytest.approx(10.8, abs=0.35)
+    assert all(row["source"] != "still.mp4" for row in cuts["cuts"])
+    assert "KEYWORDS" not in (tmp_path / "brief.md").read_text(encoding="utf-8")
+
+
 def test_assemble_holds_check_your_feet_and_skips_the_silent_follow(tmp_path):
     (tmp_path / "brief.md").write_text(
         "LENGTH: 10s\nSTYLE: talking\n"

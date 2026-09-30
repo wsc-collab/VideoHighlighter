@@ -31,8 +31,10 @@ cannot score a window as someone talking. A file whose mean volume is
 room tone cannot fill a talking gap either, even when the picture is
 moving and the transcript claims the whole file is speech. When LENGTH
 still needs time, a must-include grows along the real speech after it
-instead of taking that quiet clip. A cue to pause, hold, or check feet
-holds that window open two more seconds so the beat is not cut off. A
+instead of taking that quiet clip. A setup line (pause, hold, check
+feet, and the same kind of foreshadow: watch, ready, finish, here we
+go) holds that window open two more seconds so the beat is not cut off.
+That hold is the talking default for every clip, not a KEYWORDS match. A
 kept highlight that is missing from the final cut stops the run. With
 neither field, the ranker chooses on its own. Talking playback follows
 clip name and time, except the opener: that cut is the ``TITLE_UNDER``
@@ -1038,11 +1040,13 @@ def extend_coaching_beats(
     durations: dict | None = None,
     log_fn=print,
 ) -> list[Window]:
-    """Hold a window open two seconds after pause, hold, or check-feet.
+    """Hold every talking window open two seconds after a setup line.
 
-    The cut was ending on the last word, so the player never got to do
-    the thing the coach just asked for. A later must-include on the same
-    clip keeps its start; anything else moves out of the way.
+    Pause, hold, and check-feet started this. The same gap follows a
+    foreshadow ("watch this", "ready", "finish") so the cut does not end
+    on the cue. It runs on every kept clip. Brief KEYWORDS are not
+    consulted. A later must-include on the same clip keeps its start;
+    anything else moves out of the way.
     """
     from modules.club.pick import extend_coaching_window
 
