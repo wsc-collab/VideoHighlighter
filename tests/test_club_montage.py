@@ -1693,6 +1693,113 @@ def test_speech_beside_a_must_include_fills_the_open_length():
     assert not any(window.source == "still.mp4" for window in picked)
 
 
+def test_digit_spam_is_not_speech_and_silence_cannot_fill_the_gap():
+    """Whisper digit spam must not become speech=1, and room tone must not mid-fill.
+
+    IMG_7227 is the failure: one junk segment covers the file, speech
+    coverage becomes 1, motion is high, and the trimmed window lands
+    between must-includes. Real speech after a must-include takes that
+    time instead.
+    """
+    from modules.club.montage import is_real_speech_text, is_talking_fill, speech_coverage
+
+    spam = "1,5,5,5,5,5,5,5,5,5"
+    assert is_real_speech_text(spam) is False
+    assert is_real_speech_text("1, 5, 5, 5, 5, 5") is False
+    assert is_real_speech_text("") is False
+    assert is_real_speech_text("...") is False
+    assert is_real_speech_text("um uh") is False
+    assert is_real_speech_text("hold your finish") is True
+    assert is_real_speech_text("ok") is True
+    assert is_real_speech_text("we play at 4") is True
+    segments = [{"start": 0.0, "end": 8.6, "text": spam}]
+    assert speech_coverage(segments, 0.0, 2.96) == 0.0
+    assert speech_coverage(segments, 0.0, 8.6) == 0.0
+    scored = score_windows_for_clip(
+        source="IMG_7227.MOV", path="IMG_7227.MOV", duration=8.6, style="talking",
+        keywords=(), peak_times=[0.4, 1.2],
+        motion_series=[0.2, 0.9, 0.4, 0.8, 0.3, 0.7, 0.5, 0.6, 0.4],
+        segments=segments,
+    )
+    assert scored
+    assert all(window.speech == 0.0 for window in scored)
+    assert all(window.motion > 0.15 for window in scored)
+    assert all(window.score < 1 for window in scored)
+
+    # Loudness gate, even when a caller still stamps the junk window speech=1.
+    fake = Window(
+        "IMG_7227.MOV", "IMG_7227.MOV", 0, 8, 0.12, 0.66, 1.0, 0,
+        score=4.675, audible=False,
+    )
+    assert is_silent_still(fake)
+    assert is_talking_fill(fake) is False
+    from modules.club.montage import select_with_forced
+    must = Window(
+        "IMG_7244.MOV", "IMG_7244.MOV", 0.75, 2.85, 0.2, 0.3, 1, 0,
+        forced=True, include="we play at four", kind="must_include",
+    )
+    other = Window(
+        "IMG_7230.MOV", "IMG_7230.MOV", 0.75, 4.2, 0.2, 0.3, 1, 0,
+        forced=True, include="hold your finish", kind="must_include",
+    )
+    picked = select_with_forced(
+        [fake], [must, other], 18, 18, style="talking",
+        segments_by_source={
+            "IMG_7244.MOV": [
+                {"start": 1.0, "end": 2.6, "text": "we play at four"},
+                {"start": 3.0, "end": 7.5, "text": "keep your eye on the ball John"},
+            ],
+        },
+        durations={"IMG_7244.MOV": 20, "IMG_7227.MOV": 8.6, "IMG_7230.MOV": 20},
+    )
+    assert all(window.source != "IMG_7227.MOV" for window in picked)
+    grown = next(window for window in picked if window.source == "IMG_7244.MOV")
+    assert grown.kind == "must_include"
+    assert grown.end >= 7.0
+    assert any(window.source == "IMG_7230.MOV" and window.forced for window in picked)
+
+
+def test_title_under_slash_matches_one_alternative():
+    """A slash is alternatives. A phrase with no slash stays one phrase."""
+    john = Window(
+        "b.mp4", "b.mp4", 2, 6, 0.2, 0.2, 1, 0,
+        forced=True, include="we play at four", kind="must_include",
+        heard="we play at four with John",
+    )
+    other = Window(
+        "a.mp4", "a.mp4", 1, 4, 0.2, 0.2, 1, 0,
+        forced=True, include="hold your finish", kind="must_include",
+        heard="hold your finish",
+    )
+    named = playback_order([john, other], "talking", scene="John / pink shirt")
+    assert named[0].source == "b.mp4"
+    # "John" does not match inside "Johnson".
+    johnson = Window(
+        "j.mp4", "j.mp4", 0, 4, 0.2, 0.2, 1, 0,
+        forced=True, include="Johnson said finish", kind="must_include",
+        heard="Johnson said finish",
+    )
+    assert playback_order(
+        [johnson, other], "talking", scene="John / pink shirt",
+    )[0].source == "a.mp4"
+    phrase = playback_order(
+        [
+            other,
+            Window(
+                "c.mp4", "c.mp4", 0, 4, 0.1, 0.2, 0.5, 0,
+                heard="the taller Asian guy pink shirt is talking",
+            ),
+            Window(
+                "d.mp4", "d.mp4", 0, 4, 0.1, 0.4, 1.0, 0,
+                heard="a pink ball",
+            ),
+        ],
+        "talking",
+        scene="taller Asian guy pink shirt",
+    )
+    assert phrase[0].source == "c.mp4"
+
+
 def test_title_under_opens_on_that_person_not_a_silent_match():
     other = Window(
         "a.mp4", "a.mp4", 1, 4, 0.2, 0.2, 1, 0,
@@ -1801,6 +1908,112 @@ def test_assemble_fills_the_gap_and_opens_on_title_under(tmp_path):
     assert hold["end"] >= 4.0
 
 
+def test_hallucinated_silence_does_not_fill_after_the_title(tmp_path):
+    """IMG_7227 digit spam must not score speech=1 or play between must-includes.
+
+    The file is room tone with motion. Whisper covers it with one junk
+    line. LENGTH still needs time, so the must-include that is actually
+    talking grows along that speech, and 7227 stays out of the cut.
+    """
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 18s\nSTYLE: talking\n"
+        "TITLE: Private lesson with Coach John Wang\n"
+        "TITLE_ACCENT: John Wang\n"
+        "TITLE_UNDER: John / pink shirt\n"
+        "MUST_INCLUDE:\n"
+        "- IMG_7230.MOV: \"hold your finish\"\n"
+        "- IMG_7244.MOV: \"we play at four\"\n",
+        encoding="utf-8",
+    )
+    for name in ("IMG_7227.MOV", "IMG_7230.MOV", "IMG_7244.MOV"):
+        (tmp_path / name).write_bytes(b"x")
+
+    def words(start, tokens):
+        return [
+            {"start": start + index * 0.4, "end": start + (index + 1) * 0.4, "text": token}
+            for index, token in enumerate(tokens)
+        ]
+
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {
+                "source": "IMG_7227.MOV",
+                "duration_s": 8.6,
+                "segments": [{
+                    "start": 0.0,
+                    "end": 8.6,
+                    "text": "1,5,5,5,5,5,5,5,5,5",
+                }],
+            },
+            {
+                "source": "IMG_7230.MOV",
+                "duration_s": 20,
+                "segments": [{
+                    "start": 1.0,
+                    "end": 2.2,
+                    "text": "hold your finish",
+                    "words": words(1.0, ["hold", "your", "finish"]),
+                }],
+            },
+            {
+                "source": "IMG_7244.MOV",
+                "duration_s": 20,
+                "segments": [
+                    {
+                        "start": 1.0,
+                        "end": 2.6,
+                        "text": "we play at four",
+                        "words": words(1.0, ["we", "play", "at", "four"]),
+                    },
+                    {
+                        "start": 3.0,
+                        "end": 7.5,
+                        "text": "keep your eye on the ball John",
+                    },
+                ],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def probe(path):
+        return {"duration": 8.6 if str(path).endswith("7227.MOV") else 20.0}
+
+    def motion(path, duration):
+        n = max(1, int(duration))
+        if str(path).endswith("7227.MOV"):
+            return [0.2, 0.9, 0.4, 0.8, 0.3, 0.7, 0.5, 0.6, 0.4][:n] or [0.8]
+        return [0.4] * n
+
+    def loudness(path):
+        return -56.0 if str(path).endswith("7227.MOV") else -18.0
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=probe,
+        peaks=lambda _p: [0.4, 1.2, 2.0],
+        motion=motion,
+        loudness=loudness,
+    )
+    assert cuts["title_under"] == "John / pink shirt"
+    assert cuts["cuts"][0]["source"] == "IMG_7244.MOV"
+    assert cuts["cuts"][0].get("kind") == "must_include"
+    assert cuts["cuts"][0]["end"] >= 7.0
+    sources = [row["source"] for row in cuts["cuts"]]
+    assert "IMG_7227.MOV" not in sources
+    assert "IMG_7230.MOV" in sources
+    assert sources.index("IMG_7244.MOV") < sources.index("IMG_7230.MOV")
+    scored = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
+    spam = [row for row in scored["windows"] if row["source"] == "IMG_7227.MOV"]
+    assert spam
+    assert all(row["speech"] == 0.0 for row in spam)
+    assert all(row["score"] < 1 for row in spam)
+    assert all(not row["selected"] for row in spam)
+    assert all(row["matched"] and row["kept"] for row in cuts["includes"])
+
+
 def test_silent_stills_do_not_fill_the_middle_when_talking_or_action_exists():
     """A short silent clip must not follow the title just because it fits."""
     from modules.club.montage import _talking_pack_rank
@@ -1859,6 +2072,105 @@ def test_check_your_feet_and_pause_hold_the_beat():
 
     plain = [{"start": 1.0, "end": 2.0, "text": "we play at four"}]
     assert extend_coaching_window(0.75, 2.25, 20.0, plain) == (0.75, 2.25)
+
+
+def test_setup_lines_hold_the_beat_like_pause_hold_and_feet():
+    """Foreshadow gets the same two seconds. An ordinary line does not."""
+    from modules.club.pick import extend_coaching_window
+
+    def cue(text, start=1.0, end=2.4):
+        return [{"start": start, "end": end, "text": text}]
+
+    for text in (
+        "watch this",
+        "here we go",
+        "show me",
+        "get ready",
+        "your turn",
+        "one more",
+        "and finish",
+        "let's see",
+        "right there",
+        "follow through",
+        "set up",
+        "wait there",
+        "stay",
+        "freeze",
+        "try again",
+        "don't move",
+        "balance",
+    ):
+        _start, end = extend_coaching_window(0.75, 2.65, 20.0, cue(text))
+        assert end == pytest.approx(4.4, abs=0.05), text
+
+    # The words are not brief KEYWORDS. A line with none of the cues stays put.
+    plain = [{"start": 1.0, "end": 2.0, "text": "we play at four on saturday"}]
+    assert extend_coaching_window(0.75, 2.25, 20.0, plain) == (0.75, 2.25)
+
+
+def test_talking_extends_a_setup_line_with_no_keywords(tmp_path):
+    """Every talking clip holds the beat. KEYWORDS are not required."""
+    (tmp_path / "brief.md").write_text(
+        "LENGTH: 8s\nSTYLE: talking\nTITLE: Lesson\n"
+        "MUST_INCLUDE: \"watch this\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "coach.mp4").write_bytes(b"a")
+    (tmp_path / "still.mp4").write_bytes(b"b")
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "whisper": "small",
+        "files": [
+            {
+                "source": "coach.mp4",
+                "duration_s": 20,
+                "segments": [
+                    {"start": 1.0, "end": 1.8, "text": "watch this"},
+                    {"start": 8.0, "end": 8.8, "text": "here we go"},
+                ],
+            },
+            {
+                "source": "still.mp4",
+                "duration_s": 8,
+                "segments": [{
+                    "start": 0.0,
+                    "end": 8.0,
+                    "text": "1,5,5,5,5,5,5,5,5,5",
+                }],
+            },
+        ],
+    }), encoding="utf-8")
+
+    def motion(path, duration):
+        n = max(1, int(duration))
+        if str(path).endswith("still.mp4"):
+            return [0.8] * n
+        return [0.4] * n
+
+    def loudness(path):
+        return -56.0 if str(path).endswith("still.mp4") else -18.0
+
+    cuts = run_club_montage(
+        tmp_path,
+        dry_run=True,
+        use_whisper=False,
+        probe=lambda path: {"duration": 8.0 if str(path).endswith("still.mp4") else 20.0},
+        peaks=lambda _p: [1, 2, 3],
+        motion=motion,
+        loudness=loudness,
+    )
+    cue = next(row for row in cuts["cuts"] if row.get("forced"))
+    assert cue["source"] == "coach.mp4"
+    assert "watch this" in cue["include"]
+    # Quote ends at 1.8s. The beat holds two seconds past that line.
+    assert cue["end"] == pytest.approx(3.8, abs=0.15)
+    follow = [
+        row for row in cuts["cuts"]
+        if row["source"] == "coach.mp4" and 7 <= row["start"] <= 9
+    ]
+    assert len(follow) == 1
+    assert follow[0]["end"] == pytest.approx(10.8, abs=0.35)
+    assert all(row["source"] != "still.mp4" for row in cuts["cuts"])
+    assert "KEYWORDS" not in (tmp_path / "brief.md").read_text(encoding="utf-8")
 
 
 def test_assemble_holds_check_your_feet_and_skips_the_silent_follow(tmp_path):

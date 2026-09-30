@@ -25,14 +25,49 @@ CLIP_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 # A one-word hit is widened to at least a second so it is watchable.
 QUOTE_PAD_S = 0.25
 QUOTE_MIN_S = 1.0
-# After "check your feet", "pause", or "hold", the picture has to stay up
-# long enough for the player to do it. Two seconds past the line.
+# After a setup line the picture has to stay up long enough for the beat
+# the coach just cued. Two seconds past the line. This is the talking-pack
+# default for every clip. Brief KEYWORDS do not turn it on or off.
 COACHING_BEAT_S = 2.0
+# Token sequences, already case-folded with apostrophes removed. A single
+# word is an imperative to stop or show ("hold", "watch"). A longer tuple
+# is a phrase so "your" does not fire inside "your finish".
 _COACHING_PATTERNS = (
     ("check", "your", "feet"),
     ("check", "feet"),
+    ("check", "your"),
     ("pause",),
     ("hold",),
+    ("wait",),
+    ("stay",),
+    ("freeze",),
+    ("ready",),
+    ("get", "ready"),
+    ("get", "set"),
+    ("set", "up"),
+    ("watch",),
+    ("look",),
+    ("notice",),
+    ("show", "me"),
+    ("here", "we", "go"),
+    ("there", "you", "go"),
+    ("lets", "see"),
+    ("let", "me", "see"),
+    ("your", "turn"),
+    ("one", "more"),
+    ("try", "it"),
+    ("try", "that"),
+    ("try", "again"),
+    ("again",),
+    ("finish",),
+    ("balance",),
+    ("follow", "through"),
+    ("right", "there"),
+    ("dont", "move"),
+    ("slow", "down"),
+    ("take", "your", "time"),
+    ("from", "here"),
+    ("pose",),
 )
 
 
@@ -183,8 +218,10 @@ def _segment_tokens(seg: dict) -> list[tuple[str, float, float]]:
 
 
 def coaching_cue_anchor(segments, start: float, end: float) -> float | None:
-    """End of the latest pause / hold / check-feet line that meets this window.
+    """End of the latest setup line that meets this window.
 
+    Pause, hold, and check-feet are the original cues. The same hold applies
+    to the same kind of foreshadow ("watch this", "here we go", "finish").
     The anchor is the end of the spoken line, not the first cue word, when
     the rest of that line follows within a couple of seconds. ``None`` when
     the window does not contain one of those cues.
@@ -220,10 +257,11 @@ def extend_coaching_window(
     duration: float | None,
     segments,
 ) -> tuple[float, float]:
-    """Push ``end`` out so a pause, hold, or foot-check is not cut off.
+    """Push ``end`` out so a setup line is not cut off on the last word.
 
     The extra time is two seconds after the line. A window that already
-    holds that long is left alone. The end stays inside the clip.
+    holds that long is left alone. The end stays inside the clip. Talking
+    packs do this for every clip. It does not consult brief KEYWORDS.
     """
     anchor = coaching_cue_anchor(segments, start, end)
     if anchor is None:
