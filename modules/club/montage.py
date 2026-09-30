@@ -23,7 +23,11 @@ editor. It is not a prompt and it is not caption text.
 ``pick`` (or ``--transcript-only``) writes a transcript and stops, so a
 person can choose lines before anything is cut. ``MUST_INCLUDE`` and
 ``INCLUDE_WINDOWS`` force those moments in. The ranker fills whatever
-is left of LENGTH. With neither field, the ranker chooses on its own.
+is left of LENGTH. A kept highlight that is missing from the final cut
+stops the run. With neither field, the ranker chooses on its own.
+Talking playback follows clip name and time, except the opener: that
+cut is a must-include when one was named, otherwise a window with
+speech, so a silent still does not sit under the title.
 """
 
 from __future__ import annotations
@@ -111,6 +115,10 @@ MOTION_WIDTH = 96
 # with a small score haircut, and speech can still win.
 MIXED_GAP_DB = 18.0
 MIC_SOFT_FACTOR = 0.85
+# Below both of these, a window is a silent still. The title does not open
+# on one when a must-include or a window with speech is in the cut.
+OPEN_SPEECH_FLOOR = 0.08
+OPEN_MOTION_FLOOR = 0.05
 _MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
 
 
@@ -129,6 +137,7 @@ class Window:
     trimmed: bool = False
     forced: bool = False
     include: str = ""
+    kind: str = ""
 
     @property
     def duration(self) -> float:
@@ -152,6 +161,8 @@ class Window:
         if self.forced:
             payload["forced"] = True
             payload["include"] = self.include
+            if self.kind:
+                payload["kind"] = self.kind
         if play_index is not None:
             payload["play_index"] = play_index
         return payload
@@ -429,6 +440,7 @@ def select_windows(
                 trimmed=True,
                 forced=window.forced,
                 include=window.include,
+                kind=window.kind,
             )
         chosen.append(piece)
         total += piece.duration
@@ -456,15 +468,18 @@ def select_with_forced(
     total = sum(window.duration for window in chosen)
     midpoint = (min_s + max_s) / 2.0
     if total >= midpoint - 1e-6 or total >= max_s - 0.05:
-        return chosen
-    pool = [
-        window for window in windows
-        if not any(_same_source_overlap(window, kept) for kept in chosen)
-    ]
-    room = max_s - total
-    filler_target = midpoint - total
-    filler = select_windows(pool, filler_target, max(filler_target, room), target=filler_target)
-    return chosen + filler
+        result = chosen
+    else:
+        pool = [
+            window for window in windows
+            if not any(_same_source_overlap(window, kept) for kept in chosen)
+        ]
+        room = max_s - total
+        filler_target = midpoint - total
+        filler = select_windows(pool, filler_target, max(filler_target, room), target=filler_target)
+        result = chosen + filler
+    assert_forced_windows_kept(forced, result)
+    return result
 
 
 def _forced_window(span: ForcedSpan) -> Window:
@@ -480,13 +495,117 @@ def _forced_window(span: ForcedSpan) -> Window:
         score=0.0,
         forced=True,
         include=span.include,
+        kind=span.kind,
     )
 
 
+def _windows_match(span: Window, cut: Window) -> bool:
+    """Whether ``cut`` is the forced window, within rounding."""
+    return (
+        span.source == cut.source
+        and abs(span.start - cut.start) <= 0.02
+        and abs(span.end - cut.end) <= 0.02
+    )
+
+
+def assert_forced_windows_kept(forced: list[Window], cuts: list[Window]) -> None:
+    """Raise when a forced window was dropped before the cut list was built.
+
+    Every ``MUST_INCLUDE`` and ``INCLUDE_WINDOWS`` span that was kept has to
+    be in the list that will be written. Overlap skips and unmatched quotes
+    never enter ``forced``, so they are not invented here.
+    """
+    missing = [span for span in forced if not any(_windows_match(span, cut) for cut in cuts)]
+    if not missing:
+        return
+    detail = "; ".join(
+        f"{window.source} {window.start:.2f}–{window.end:.2f}s"
+        f"{(' (' + window.include + ')') if window.include else ''}"
+        for window in missing
+    )
+    raise BriefError(
+        "A must-include is missing from the final cut. "
+        f"Refusing to assemble without it: {detail}"
+    )
+
+
+def assert_includes_in_cuts(include_rows: list[dict], cuts: list[Window]) -> None:
+    """Raise when a row marked kept is absent from the final cut list.
+
+    ``kept`` is false for an unmatched quote and for a window skipped because
+    it overlaps one already kept. Those stay out. A row that says it was
+    kept and then does not appear in the cut list stops the run.
+    """
+    missing = []
+    for row in include_rows or []:
+        if not row.get("kept"):
+            continue
+        try:
+            start = float(row["start"])
+            end = float(row["end"])
+        except (KeyError, TypeError, ValueError):
+            missing.append(row)
+            continue
+        source = str(row.get("source") or "")
+        found = any(
+            cut.source == source
+            and abs(cut.start - start) <= 0.02
+            and abs(cut.end - end) <= 0.02
+            for cut in cuts
+        )
+        if not found:
+            missing.append(row)
+    if not missing:
+        return
+    detail = "; ".join(
+        f"{row.get('kind') or 'include'} {row.get('text') or row.get('source') or ''}".strip()
+        for row in missing
+    )
+    raise BriefError(
+        "A must-include is missing from the final cut. "
+        f"Refusing to assemble without it: {detail}"
+    )
+
+
+def _open_tier(window: Window) -> int:
+    """How strongly a window should lead a talking cut. Higher is better."""
+    if window.kind == "must_include":
+        return 3
+    if window.forced:
+        return 2
+    if window.speech >= OPEN_SPEECH_FLOOR or window.motion >= OPEN_MOTION_FLOOR:
+        return 1
+    return 0
+
+
+def _lead_with_talking(ordered: list[Window]) -> list[Window]:
+    """Move a talking window to the front. Leave the rest in clip order.
+
+    A must-include leads when one is in the cut, then any other forced
+    window, then the window with the most speech. A silent still stays
+    first only when nothing else in the cut is talking or was forced in.
+    """
+    if len(ordered) < 2:
+        return ordered
+    best = max(_open_tier(window) for window in ordered)
+    if best == 0 or _open_tier(ordered[0]) == best:
+        return ordered
+    candidates = [window for window in ordered if _open_tier(window) == best]
+    opener = max(candidates, key=lambda window: (window.speech, window.motion))
+    return [opener, *[window for window in ordered if window is not opener]]
+
+
 def playback_order(windows: list[Window], style: str) -> list[Window]:
-    """Hype plays strongest first. Talking plays in clip-name, then time, order."""
+    """Hype plays strongest first.
+
+    Talking plays in clip-name, then time, order, after the opener. The
+    opener is a must-include when the brief named one, otherwise a window
+    with speech or motion. A silent still does not sit under the title
+    while a talking window is later in the list.
+    """
     if style == "talking":
-        return sorted(windows, key=lambda w: (w.source.casefold(), w.start))
+        ordered = sorted(windows, key=lambda w: (w.source.casefold(), w.start))
+        return _lead_with_talking(ordered)
     return list(windows)
 
 
@@ -912,6 +1031,17 @@ def run_club_montage(
         windows, forced, brief.length_min_s, brief.length_max_s,
     )
     ordered = playback_order(selected, brief.style)
+    try:
+        assert_includes_in_cuts(include_rows, ordered)
+    except BriefError as exc:
+        log_fn(str(exc))
+        raise
+    if brief.style == "talking" and ordered:
+        lead = ordered[0]
+        log_fn(
+            f"Opening under the title: {lead.source} "
+            f"{lead.start:.2f}–{lead.end:.2f}s."
+        )
     assembled = sum(w.duration for w in ordered)
     within = brief.length_min_s - 1e-3 <= assembled <= brief.length_max_s + 1e-3
 

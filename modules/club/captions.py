@@ -63,10 +63,11 @@ def talking_windows(duration: float, *, cta: bool = True) -> dict[str, tuple[flo
     """Title, caption body, and end-card spans on the assembled cut.
 
     The lower-third slot is always empty: captions occupy the middle, not
-    a second copy of the title. On a very short cut the three spans split
-    the timeline in thirds so they still do not overlap. With no call to
-    action the end span stays empty and captions run through the close,
-    so the cut does not finish on a blank card.
+    a second copy of the title. Captions start when the title ends, so
+    nothing is burned on top of the title. On a very short cut the three
+    spans split the timeline in thirds so they still do not overlap. With
+    no call to action the end span stays empty and captions run through
+    the close, so the cut does not finish on a blank card.
     """
     duration = max(0.0, float(duration))
     empty = (0.0, 0.0)
