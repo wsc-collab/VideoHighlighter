@@ -26,12 +26,15 @@ captions, and the call to action sit on the picture: white type, black
 stroke, no filled plate. ``COLORS`` still paints a hype card, not this pack.
 
 Leave ``CAPTION_SIZE`` and ``CAPTION_POSITION`` out to use the talking
-defaults: captions in the center of the frame, one line at a time, sized
-so a short cue covers about three quarters of the frame width, still
-smaller than the title. A call to action uses the title's look at a
-slightly smaller size.
-``CAPTION_POSITION: bottom`` or ``top`` still works. ``middle`` is the
-same place as ``center``.
+defaults: captions at two-fifths of the frame height from the top
+(``two_fifths``, Y ≈ 0.4 × height), one line at a time, horizontally
+centered, sized so a short cue covers about three quarters of the frame
+width, still smaller than the title. A call to action uses the title's
+look at a slightly smaller size.
+``CAPTION_POSITION: center`` (``middle`` is the same place), ``bottom``,
+or ``top`` still works. ``0.4``, ``two-fifths``, and ``2/5`` are the
+same place as ``two_fifths``. A non-talking brief that omits the field
+stays at ``center``.
 
 ``LENGTH`` is the finished draft's duration. A single number (``30s``) means
 that exact length. ``STYLE`` is ``hype`` or ``talking``. ``KEYWORDS`` and
@@ -97,7 +100,9 @@ _CLIP_HINT = re.compile(
     r"^(?P<file>.+\.(?:mp4|mov|m4v|mkv|avi|webm))\s*:\s*(?P<rest>.+)$",
     re.IGNORECASE,
 )
-CAPTION_POSITIONS = ("center", "middle", "bottom", "top")
+CAPTION_POSITIONS = ("two_fifths", "center", "middle", "bottom", "top")
+# Spellings that store as ``two_fifths``. ``0.4`` is also accepted by value.
+_TWO_FIFTHS_ALIASES = frozenset({"two_fifths", "two-fifths", "2/5"})
 
 
 @dataclass(frozen=True)
@@ -238,17 +243,33 @@ def parse_colors(text: str) -> tuple[str, ...]:
     return tuple(colors)
 
 
-def parse_caption_position(text: str) -> str:
+def parse_caption_position(text: str, *, style: str = "") -> str:
+    """Caption anchor. An empty field is ``two_fifths`` on a talking brief.
+
+    Other styles keep ``center`` when the field is omitted. ``center``,
+    ``middle``, ``bottom``, and ``top`` stay available on every style.
+    """
     raw = text.strip().lower()
     if not raw:
-        return "center"
+        return "two_fifths" if style == "talking" else "center"
+    if raw in _TWO_FIFTHS_ALIASES or _is_two_fifths_fraction(raw):
+        return "two_fifths"
     if raw not in CAPTION_POSITIONS:
         raise BriefError(
-            f"CAPTION_POSITION must be center, bottom, or top, got {text!r}."
+            "CAPTION_POSITION must be two_fifths, center, bottom, or top, "
+            f"got {text!r}."
         )
     if raw == "middle":
         return "center"
     return raw
+
+
+def _is_two_fifths_fraction(text: str) -> bool:
+    """True for a numeric spelling of 0.4, such as ``0.4`` or ``0.40``."""
+    try:
+        return float(text) == 0.4
+    except ValueError:
+        return False
 
 
 def parse_caption_size(text: str) -> int:
@@ -488,7 +509,10 @@ def parse_brief(text: str, source: str = "") -> Brief:
         caption_stroke=stroke_color,
         caption_stroke_width=stroke_width,
         caption_size=parse_caption_size(fields.get("CAPTION_SIZE", "")),
-        caption_position=parse_caption_position(fields.get("CAPTION_POSITION", "")),
+        caption_position=parse_caption_position(
+            fields.get("CAPTION_POSITION", ""),
+            style=style,
+        ),
         caption_font=_one_line(fields.get("CAPTION_FONT", "")),
         must_include=parse_must_include(fields.get("MUST_INCLUDE", "")),
         include_windows=parse_include_windows(fields.get("INCLUDE_WINDOWS", "")),
