@@ -61,8 +61,11 @@ A person can choose the lines before anything is cut.
    rally.mov 12.0-18.5
    ```
 
-   Those windows are cut in. The ranker fills whatever is left of
-   `LENGTH`. Leave both fields out and the ranker chooses on its own,
+   Those windows are cut in. The ranker still fills whatever is left of
+   `LENGTH`. On a talking cut that fill is high speech, then motion
+   inside those talking windows. A silent or low-motion stretch is not
+   used to close the gap, so a must-include does not leave a pause in
+   the middle. Leave both fields out and the ranker chooses on its own,
    as before. A quote that is not in the transcript is listed in
    `cuts.json` under `includes` and is not invented. An
    `INCLUDE_WINDOWS` file that is not in the folder stops the run.
@@ -165,6 +168,7 @@ CAPTION_POSITION: bottom
 | `INCLUDE_WINDOWS` | no | `file start-end` ranges to force in. Seconds or `m:ss`. |
 | `NOTES` | no | Copied into `cuts.json` for the editor. Not a prompt and not a caption. |
 | `TITLE` | no | Who and what the video is, about the first 2–3 seconds. Inter Bold, white, centered, two or three large lines, soft shadow, no stroke, no plate. Not a line from the transcript. |
+| `TITLE_UNDER` | no | Who is on camera under the title. Alias `OPEN_SCENE`. Not drawn. A talking window whose file name or transcript matches it leads. Example: `John`. |
 | `TITLE_ACCENT` | no | The span inside `TITLE` drawn in a script face, such as `John Wang`, on its own line. The rest stays Inter Bold. |
 | `SUBTITLE` | no | Optional second line with the title. Same bold white, no stroke. |
 | `COLORS` | no | Ignored for talking type. On `hype`, the first hex is the bar and the second is the type. |
@@ -179,9 +183,12 @@ CAPTION_POSITION: bottom
 
 `talking` favours speech and keywords, and plays clips in name order, then
 time order, so a conversation stays in sequence. The first cut is the
-exception: it is a must-include when the brief named one, otherwise a
-window with speech. A silent still does not play under the title while
-a talking window is in the cut. `hype` favours audio peaks
+exception: `TITLE_UNDER` or `OPEN_SCENE` when that match is someone
+talking, otherwise a must-include, otherwise a window with speech. A
+silent still does not play under the title while a talking window is in
+the cut. After any must-include, the ranker fills the rest of `LENGTH`
+with high-speech windows (action breaks the tie). It does not insert a
+silent or low-motion window to make the length. `hype` favours audio peaks
 and motion. Use it only when you want a highlights cut inside this tool.
 A silent hype montage belongs in CapCut, not here.
 
@@ -350,8 +357,10 @@ A mixed file stays, with its score multiplied by 0.85.
 
 When `STYLE` is `talking` and the folder has more than one clip, each file's
 mean volume is read with ffmpeg `volumedetect`. Fill order after any
-must-include is speech, then motion inside those talking windows, then
-brief keywords, then audio energy as a weak tie-break.
+must-include is high speech, then motion inside those talking windows,
+then brief keywords, then audio energy as a weak tie-break. A window
+that is mostly silence or a still is not used to fill what the
+must-includes left open.
 
 A same-session lesson (the quietest file is within **18 dB** of the
 loudest) is not penalised. A file **18 dB or more** below the loudest —

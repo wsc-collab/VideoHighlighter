@@ -42,7 +42,14 @@ action, a non-talking brief stays a highlights cut.
 ``MUST_INCLUDE`` is optional. Each line is a quote or a short description
 of a moment from the transcript. ``INCLUDE_WINDOWS`` is optional too:
 ``clip.mp4 12.0-18.5`` or ``clip.mp4 0:12-0:18``. Those ranges are cut
-in. When both are empty, the ranker chooses on its own.
+in. The ranker still fills the rest of ``LENGTH`` with other talking
+windows. When both are empty, the ranker chooses on its own.
+
+``TITLE_UNDER`` (alias ``OPEN_SCENE``) names who is on camera under the
+title. The words are the operator's, a name or a short description of
+that person. They are not drawn. A talking window whose file name or
+transcript contains them leads. A description that was never said, and
+does not match a file name, leaves the opener as it was.
 """
 
 from __future__ import annotations
@@ -76,6 +83,7 @@ KNOWN_FIELDS = {
     "CAPTION_COLOR", "CAPTION_STROKE", "CAPTION_SIZE",
     "CAPTION_POSITION", "CAPTION_FONT",
     "MUST_INCLUDE", "INCLUDE_WINDOWS",
+    "TITLE_UNDER", "OPEN_SCENE",
 }
 _CLOCK = r"\d+(?::\d{1,2}){0,2}(?:\.\d+)?"
 _WINDOW_LINE = re.compile(
@@ -113,6 +121,7 @@ class Brief:
     caption_font: str = ""
     must_include: tuple[str, ...] = ()
     include_windows: tuple[tuple[str, float, float], ...] = ()
+    title_under: str = ""
 
     def wants_brand(self) -> bool:
         """True when the brief asks for type on the cut.
@@ -142,6 +151,7 @@ class Brief:
             "caption_position": self.caption_position,
             "caption_font": self.caption_font,
             "must_include": list(self.must_include),
+            "title_under": self.title_under,
             "include_windows": [
                 {"source": source, "start": start, "end": end}
                 for source, start, end in self.include_windows
@@ -480,6 +490,10 @@ def parse_brief(text: str, source: str = "") -> Brief:
         caption_font=_one_line(fields.get("CAPTION_FONT", "")),
         must_include=parse_must_include(fields.get("MUST_INCLUDE", "")),
         include_windows=parse_include_windows(fields.get("INCLUDE_WINDOWS", "")),
+        title_under=(
+            _one_line(fields.get("TITLE_UNDER", ""))
+            or _one_line(fields.get("OPEN_SCENE", ""))
+        ),
     )
 
 
