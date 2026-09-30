@@ -69,8 +69,9 @@ A person can choose the lines before anything is cut.
 
    The assemble step reads `transcript.json` when it is already there, so
    the folder is not transcribed again. `pick` hears every file, including
-   a quiet phone take. The assemble step still leaves that quiet file out
-   of the automatic fill. A highlight that names it is kept.
+   a quiet phone take. A same-session lesson mic is ranked with the rest.
+   A file far under the loudest (boom mixed with a phone) stays in the
+   pool with a small score haircut. A highlight that names it is kept.
 
 ## brief.md
 
@@ -329,25 +330,30 @@ width on a short cue. A wide phrase is the next cue. Those words are
 the Whisper cues, not the title.
 `cuts.json` lists them under `captions.cues`.
 
-If the folder also has a quiet phone zoom of a mic'd take, check
-`mic_preference` in `cuts.json`. A file 12 dB or more under the loudest
-clip is left out. A face-zoom that is about as loud as the mic is not
-detected; leave that file out of the folder by hand.
+If the folder is one lesson mic, level is not used to hide a clip. Check
+`mic_preference` in `cuts.json`. `mode` is `same_session` when every file
+is within 18 dB of the loudest, and `mixed` when a file is further down.
+A mixed file stays, with its score multiplied by 0.85.
 
 ### Quiet takes in a talking folder
 
 When `STYLE` is `talking` and the folder has more than one clip, each file's
-mean volume is read with ffmpeg `volumedetect`. A clip **12 dB or more**
-below the loudest file is left out of the cut. That is the usual gap between
-a mic'd take and a quiet phone recording of the same moment. The choice is
-written on `cuts.json` and `scores.json` under `mic_preference` (`dropped`,
-`volumes_db`).
+mean volume is read with ffmpeg `volumedetect`. Fill order after any
+must-include is speech, then motion inside those talking windows, then
+brief keywords, then audio energy as a weak tie-break.
 
-This is level only. It does not look at the picture, so it will not spot a
-phone zoom that is about as loud as the mic. Two files within 12 dB both
-stay. A folder with one clip always stays. If Lisa's phone file is a zoom
-of a mic'd take and the levels are close, leave that phone file out of the
-folder by hand before the run.
+A same-session lesson (the quietest file is within **18 dB** of the
+loudest) is not penalised. A file **18 dB or more** below the loudest —
+a phone next to a boom — stays in the ranker and its windows are scored
+at **0.85**. Clear speech on that file can still beat a loud silent
+window. Nothing is dropped for level. The choice is written on
+`cuts.json` and `scores.json` under `mic_preference` (`mode`, `soft`,
+`factor`, `volumes_db`). `dropped` stays empty.
+
+This is level only. It does not look at the picture, so it will not spot
+a phone zoom that is about as loud as the mic. A folder with one clip
+is unchanged. If a phone zoom is as loud as the lesson mic and you do
+not want it, leave that file out of the folder by hand.
 
 ## Install
 

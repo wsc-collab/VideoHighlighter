@@ -111,6 +111,30 @@ def test_hype_prefers_motion_and_talking_prefers_speech():
     assert speech_t[0].score > motion_t[0].score
 
 
+def test_talking_fill_is_speech_then_motion_then_keywords_then_audio():
+    """After a must-include, the ranker follows that order. Audio cannot lead."""
+    spoken = [{"start": 0.0, "end": 8.0, "text": "coach lesson finish"}]
+    motion = [1, 1, 1, 1, 1, 1, 1, 1]
+    still = [0, 0, 0, 0, 0, 0, 0, 0]
+
+    def one(segments, series, keywords=(), peaks=None):
+        return score_windows_for_clip(
+            source="a.mp4", path="a.mp4", duration=8, style="talking",
+            keywords=keywords, peak_times=list(peaks or []),
+            motion_series=series, segments=segments,
+        )[0]
+
+    speech = one(spoken, still)
+    speech_and_motion = one(spoken, motion)
+    speech_and_keywords = one(spoken, still, keywords=("coach", "lesson", "finish"))
+    silent_busy = one([], motion, peaks=[1, 2, 3, 4, 5, 6, 7])
+    assert speech_and_motion.score > speech_and_keywords.score > speech.score
+    assert speech.score > silent_busy.score
+    # Motion does not score on a window with nobody talking.
+    assert silent_busy.motion > 0
+    assert silent_busy.score < 1
+
+
 def test_selection_stays_inside_the_brief_and_skips_overlaps():
     windows = [
         Window("a.mp4", "a.mp4", 0, 4, 0, 0, 0, 0, score=3),
@@ -851,10 +875,13 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
     assert ",5,40,40,0,1" in script
 
 
-def test_quiet_clip_names_keep_the_loudest_and_close_levels():
+def test_quiet_clip_names_keep_a_same_session_mic_and_mark_a_soft_extra():
     from modules.club.montage import quiet_clip_names
-    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", -22.0)]) == ["phone.mp4"]
-    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", -21.0)]) == []
+    assert quiet_clip_names([("lav.mp4", -10.0), ("angle.mp4", -22.0)]) == []
+    assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", -28.0)]) == ["phone.mp4"]
+    assert quiet_clip_names([
+        ("lav.mp4", -10.0), ("angle.mp4", -14.0), ("phone.mp4", -32.0),
+    ]) == ["phone.mp4"]
     assert quiet_clip_names([("lav.mp4", -10.0), ("phone.mp4", None)]) == []
     assert quiet_clip_names([("only.mp4", -40.0)]) == []
 
@@ -879,8 +906,12 @@ def test_talking_drops_a_clip_much_quieter_than_the_mic(tmp_path):
         loudness=loudness,
     )
     assert {row["source"] for row in cuts["cuts"]} == {"lav.mp4"}
-    assert cuts["mic_preference"]["dropped"] == ["phone.mp4"]
-    assert cuts["mic_preference"]["enabled"] is True
+    assert cuts["mic_preference"]["mode"] == "mixed"
+    assert cuts["mic_preference"]["soft"] == ["phone.mp4"]
+    assert cuts["mic_preference"]["dropped"] == []
+    assert cuts["mic_preference"]["factor"] == 0.85
+    scored = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
+    assert any(row["source"] == "phone.mp4" for row in scored["windows"])
 
 
 def test_hype_keeps_a_quiet_clip(tmp_path):
@@ -1326,4 +1357,5 @@ def test_a_highlight_in_a_quiet_clip_is_kept(tmp_path):
     assert [row["source"] for row in forced] == ["phone.mp4"]
     fillers = [row for row in cuts["cuts"] if not row.get("forced")]
     assert fillers and {row["source"] for row in fillers} == {"lav.mp4"}
-    assert cuts["mic_preference"]["dropped"] == ["phone.mp4"]
+    assert cuts["mic_preference"]["soft"] == ["phone.mp4"]
+    assert cuts["mic_preference"]["dropped"] == []

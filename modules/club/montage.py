@@ -1,12 +1,15 @@
 """Rank windows in a folder of real clips and assemble ``draft.mp4``.
 
-Signals, in the order this path prefers them:
+Signals, in the order a talking pack prefers them after any must-include:
 
-1. Local Whisper (``openai-whisper``), for speech overlap and KEYWORDS.
-2. Audio peaks from ``modules.audio.audio_peaks``.
-3. Frame-to-frame motion, sampled with ffmpeg.
+1. Speech from local Whisper (how much of the window is someone talking).
+2. Motion inside those talking windows.
+3. KEYWORDS from the brief.
+4. Audio energy, a weak tie-break. A same-session lesson mic is not dropped.
+   A file far under the loudest, the usual phone-next-to-a-boom case, gets
+   a small score haircut and stays in the pool.
 
-``hype`` weights peaks and motion. ``talking`` weights speech and keywords.
+``hype`` still weights peaks and motion.
 Both styles only cut ranges that already exist in the supplied files and
 concatenate those ranges. Weights change which windows are kept. They do
 not create pictures, faces, voices, or songs.
@@ -91,19 +94,23 @@ STYLE_WINDOW = {
     "talking": (8.0, 4.0),
 }
 
+# Talking: speech outranks everything that can stack on a silent window.
+# Motion is next, then keywords, then audio energy. The numbers are the
+# most each signal can add when it is fully on (0–1).
 STYLE_WEIGHTS = {
     "hype": {"audio": 1.0, "motion": 1.0, "speech": 0.25, "keyword": 0.75},
-    "talking": {"audio": 0.20, "motion": 0.15, "speech": 1.0, "keyword": 1.25},
+    "talking": {"audio": 0.12, "motion": 1.0, "speech": 4.0, "keyword": 0.45},
 }
 
 MOTION_SAMPLE_FPS = 4.0
 MOTION_WIDTH = 96
 
-# A talking folder sometimes holds the mic'd take and a quieter phone
-# recording of the same moment. Mean volume this far under the loudest
-# file is left out. Files within the gap all stay. This compares level,
-# not the picture, so it is not a duplicate-frame match.
-MIC_GAP_DB = 12.0
+# A same-session lesson mic sits inside this spread, so a few dB of
+# difference is not a reason to hide a clip. A file this far under the
+# loudest is the usual phone-next-to-a-boom case: it stays in the ranker
+# with a small score haircut, and speech can still win.
+MIXED_GAP_DB = 18.0
+MIC_SOFT_FACTOR = 0.85
 _MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
 
 
@@ -172,12 +179,15 @@ def measure_mean_volume_db(path: str) -> float | None:
     return float(match.group(1))
 
 
-def quiet_clip_names(readings, gap_db: float = MIC_GAP_DB) -> list[str]:
-    """Names at least ``gap_db`` quieter than the loudest reading.
+def quiet_clip_names(readings, gap_db: float = MIXED_GAP_DB) -> list[str]:
+    """Names far enough under the loudest reading to count as a soft extra.
 
     ``readings`` is ``(name, mean_db or None)`` in folder order. ``None``
-    stays: a file that could not be metered is not treated as a bad mic.
+    is not marked: a file that could not be metered is not a bad mic.
     The loudest file always stays, so a one-file folder is unchanged.
+    A folder whose quietest file is inside the gap is one lesson mic and
+    nothing is marked. Marked files are not removed. The ranker applies
+    ``MIC_SOFT_FACTOR`` and still lets speech win.
     """
     known = [db for _name, db in readings if db is not None]
     if len(known) < 2:
@@ -343,9 +353,12 @@ def score_windows_for_clip(
         motion_v = window_mean(motion, start, end)
         speech_v = speech_coverage(segments, start, end)
         keyword_v = keyword_strength(hits)
+        # Motion only helps a window that is already someone talking.
+        # A silent swing does not outrank the coach.
+        motion_for_score = motion_v * speech_v if style == "talking" else motion_v
         total = (
             weights["audio"] * audio_v
-            + weights["motion"] * motion_v
+            + weights["motion"] * motion_for_score
             + weights["speech"] * speech_v
             + weights["keyword"] * keyword_v
         )
@@ -748,7 +761,7 @@ def run_club_montage(
 
     clips = list_clips(root)
     loudness_fn = loudness or measure_mean_volume_db
-    dropped_quiet: list[str] = []
+    soft_quiet: list[str] = []
     volumes: dict[str, float | None] = {}
     if brief.style == "talking" and len(clips) > 1:
         readings = []
@@ -760,20 +773,24 @@ def run_club_montage(
                 db = None
             volumes[path.name] = None if db is None else round(float(db), 1)
             readings.append((path.name, db))
-        dropped_quiet = quiet_clip_names(readings)
-    dropped_set = set(dropped_quiet)
+        soft_quiet = quiet_clip_names(readings)
+    soft_set = set(soft_quiet)
+    mic_mode = "off" if brief.style != "talking" else ("mixed" if soft_quiet else "same_session")
     mic_preference = {
         "enabled": brief.style == "talking",
-        "gap_db": MIC_GAP_DB if brief.style == "talking" else None,
-        "dropped": dropped_quiet,
+        "mode": mic_mode,
+        "gap_db": MIXED_GAP_DB if brief.style == "talking" else None,
+        "factor": MIC_SOFT_FACTOR if soft_quiet else 1.0,
+        "soft": soft_quiet,
+        "dropped": [],
         "volumes_db": volumes,
         "note": (
-            "Talking folders drop a clip whose mean volume is "
-            f"{MIC_GAP_DB:g} dB or more below the loudest file. "
-            "That catches a quiet phone recording next to a mic'd take. "
-            "It does not compare pictures, so two files at a similar "
-            "level both stay. Leave an obvious phone zoom out of the "
-            "folder by hand when its level is close to the mic."
+            "Talking folders keep every clip. A same-session lesson mic "
+            f"(inside {MIXED_GAP_DB:g} dB of the loudest file) is not "
+            "penalised. A file that far under the loudest stays in the "
+            f"ranker with a {MIC_SOFT_FACTOR:g} score haircut, so a quiet "
+            "phone does not bury the boom, and clear speech can still win. "
+            "Level only, not a picture match."
         ),
     }
     log_fn(
@@ -789,14 +806,14 @@ def run_club_montage(
         )
     elif brief.style == "talking":
         log_fn("Talking pack: title, captions of the speech, then the call to action.")
-        if dropped_quiet:
+        if soft_quiet:
             known = [db for db in volumes.values() if db is not None]
             loudest = max(known) if known else None
-            for name in dropped_quiet:
+            for name in soft_quiet:
                 log_fn(
-                    f"  leaving out {name}: mean volume {volumes[name]} dB is "
-                    f"{MIC_GAP_DB:g} dB or more under the loudest clip "
-                    f"({loudest} dB). Level only, not a picture match."
+                    f"  {name}: mean volume {volumes[name]} dB is "
+                    f"{MIXED_GAP_DB:g} dB or more under the loudest clip "
+                    f"({loudest} dB). Kept, with a small score haircut."
                 )
 
     saved_payload = load_transcript(destination / "transcript.json")
@@ -815,16 +832,9 @@ def run_club_montage(
         report = {"source": path.name, "duration_s": None, "error": None}
         saved = saved_rows.get(path.name.casefold()) or {}
         saved_segments = saved.get("segments")
-        if path.name in dropped_set:
-            report["skipped"] = "quiet"
+        if path.name in soft_set:
+            report["mic"] = "soft"
             report["mean_volume_db"] = volumes.get(path.name)
-            if saved.get("duration_s"):
-                durations[path.name] = float(saved["duration_s"])
-                report["duration_s"] = _round(durations[path.name])
-            if saved_segments is not None:
-                heard[path.name] = list(saved_segments)
-            clip_reports.append(report)
-            continue
         try:
             info = probe_fn(str(path))
             duration = float(info.get("duration") or 0)
@@ -862,6 +872,9 @@ def run_club_montage(
                 motion_series=motion_series,
                 segments=segments,
             )
+            if path.name in soft_set:
+                for window in found:
+                    window.score *= MIC_SOFT_FACTOR
             windows.extend(found)
             log_fn(f"  {path.name}: {duration:.1f}s, {len(found)} windows")
         except Exception as exc:
