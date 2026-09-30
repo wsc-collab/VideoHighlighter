@@ -580,6 +580,7 @@ def test_caption_cues_are_spoken_words_inside_the_body():
     assert "Style: Caption,DejaVu Sans,42," in script
     assert "&H00FFFFFF&" in script
     assert "&H00000000&" in script
+    assert ",2,40,40,48,1" in script
     assert "join us" not in script
 
 
@@ -672,10 +673,13 @@ def test_thirty_second_talking_brief_uses_type_on_the_picture():
     )
     assert brief.length_min_s == 30
     assert brief.length_max_s == 30
-    assert brief.caption_position == "center"
+    assert brief.caption_position == "two_fifths"
     assert brief.caption_size == 0
-    assert caption_style(brief, 1080, 1920)["size"] > 16
-    assert caption_style(brief, 1080, 1920)["position"] == "center"
+    style = caption_style(brief, 1080, 1920)
+    assert style["size"] > 16
+    assert style["position"] == "two_fifths"
+    assert style["alignment"] == 8
+    assert style["margin_v"] == int(round(1920 * 0.4))
     assert caption_style(brief, 1080, 1920)["color"] == "#FFFFFF"
     assert caption_style(brief, 1080, 1920)["stroke"] == "#000000"
     windows = talking_windows(30)
@@ -778,7 +782,13 @@ def test_talking_title_is_editorial_and_type_stays_white():
         brief, width=1920, height=1080, font_path="",
     )
     assert "&HFF000000" in script
-    assert f",1,{style['stroke_width']},0,5," in script
+    assert style["position"] == "two_fifths"
+    assert style["alignment"] == 8
+    assert style["margin_v"] == int(round(1080 * 0.4))
+    assert (
+        f",1,{style['stroke_width']},0,{style['alignment']},"
+        f"40,40,{style['margin_v']},1"
+    ) in script
 
 
 def test_a_wide_caption_becomes_the_next_cue_not_a_second_line():
@@ -837,11 +847,11 @@ def test_title_uses_a_bold_file_when_one_is_installed(tmp_path):
 
 def test_caption_defaults_cover_about_three_quarters_of_the_width():
     from modules.club.captions import (
-        CAPTION_EM, CAPTION_TYPICAL_CHARS, CAPTION_WIDTH_SHARE,
+        CAPTION_EM, CAPTION_TYPICAL_CHARS, CAPTION_WIDTH_SHARE, CAPTION_Y_TWO_FIFTHS,
         CaptionCue, caption_cues, caption_style, default_caption_size, render_ass,
     )
     brief = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\nCTA: Go\n")
-    assert brief.caption_position == "center"
+    assert brief.caption_position == "two_fifths"
     assert brief.caption_size == 0
     # 9:16: a short cue covers about 75% of the width and stays under the title.
     portrait = default_caption_size(1080, 1920)
@@ -854,7 +864,11 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
     # Landscape stays under the title even when 75% of the width would not.
     landscape = default_caption_size(1920, 1080)
     assert landscape < max(18, int(1080 * 0.055))
-    assert caption_style(brief, 1920, 1080)["position"] == "center"
+    placed = caption_style(brief, 1920, 1080)
+    assert placed["position"] == "two_fifths"
+    assert placed["alignment"] == 8
+    assert placed["margin_v"] == int(round(1080 * CAPTION_Y_TWO_FIFTHS))
+    assert placed["margin_v"] / 1080 == pytest.approx(0.4)
     middle = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: middle\n")
     assert middle.caption_position == "center"
     words = "one two three four five six".split()
@@ -877,7 +891,46 @@ def test_caption_defaults_cover_about_three_quarters_of_the_width():
         brief, width=1920, height=1080, font_path="",
     )
     assert f"Style: Caption,DejaVu Sans,{caption_style(brief, 1920, 1080)['size']}," in script
+    assert f",8,40,40,{placed['margin_v']},1" in script
+
+
+def test_two_fifths_is_the_talking_default_and_other_positions_still_burn():
+    from modules.club.captions import CaptionCue, caption_anchor, caption_style, render_ass
+    omitted = parse_brief("LENGTH: 12s\nSTYLE: talking\nTITLE: Hi\n")
+    assert omitted.caption_position == "two_fifths"
+    for spelling in ("two_fifths", "two-fifths", "0.4", "0.40", "2/5"):
+        named = parse_brief(
+            f"LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: {spelling}\n"
+        )
+        assert named.caption_position == "two_fifths"
+    hype = parse_brief("LENGTH: 12s\nSTYLE: hype\n")
+    assert hype.caption_position == "center"
+    assert caption_anchor("center", 1080) == (5, 0)
+    assert caption_anchor("middle", 1080) == (5, 0)
+    assert caption_anchor("bottom", 1080) == (2, 48)
+    assert caption_anchor("top", 720) == (8, 48)
+    for height in (720, 1080, 1920):
+        align, margin = caption_anchor("two_fifths", height)
+        assert align == 8
+        assert margin == int(round(height * 0.4))
+        assert margin / height == pytest.approx(0.4, abs=0.002)
+    centered = parse_brief(
+        "LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: center\n"
+    )
+    assert caption_style(centered, 1920, 1080)["alignment"] == 5
+    assert caption_style(centered, 1920, 1080)["margin_v"] == 0
+    script = render_ass(
+        [CaptionCue(1.0, 2.0, "we play at four")],
+        centered, width=1920, height=1080, font_path="",
+    )
     assert ",5,40,40,0,1" in script
+    assert script.count("Dialogue:") == 1
+    top = parse_brief("LENGTH: 12s\nSTYLE: talking\nCAPTION_POSITION: top\n")
+    top_script = render_ass(
+        [CaptionCue(1.0, 2.0, "we play at four")],
+        top, width=1280, height=720, font_path="",
+    )
+    assert ",8,40,40,48,1" in top_script
 
 
 def test_quiet_clip_names_keep_a_same_session_mic_and_mark_a_soft_extra():

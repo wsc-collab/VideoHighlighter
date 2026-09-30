@@ -155,12 +155,15 @@ back as a green card or a dark bar with orange type. `COLORS` still
 paints a `hype` highlights card.
 
 Leave `CAPTION_SIZE` and `CAPTION_POSITION` out. The defaults put captions
-in the center, one line at a time, about four words. The point size
-scales with the frame so a short cue covers about 75% of the width, and
-stays under the title. A line that would be wider than the frame is the
-next caption cue. A brief copied from an earlier draft that still says
-`CAPTION_POSITION: bottom` or `CAPTION_SIZE: 42` keeps that old look.
-Delete those two lines. Set them only to override:
+at two-fifths of the frame height from the top (`two_fifths`,
+Y ≈ 0.4 × height), horizontally centered, one line at a time, about four
+words. That is higher than the middle of the frame and below the top
+third. The point size scales with the frame so a short cue covers about
+75% of the width, and stays under the title. A line that would be wider
+than the frame is the next caption cue. A brief copied from an earlier
+draft that still says `CAPTION_POSITION: bottom`, `CAPTION_POSITION: center`,
+or `CAPTION_SIZE: 42` keeps that old look. Delete those lines to use the
+default. Set them only to override:
 
 ```text
 CAPTION_SIZE: 72
@@ -186,7 +189,7 @@ CAPTION_POSITION: bottom
 | `CAPTION_COLOR` | no | Drawn as white or black. Default is white. A cream or orange value is drawn as white. |
 | `CAPTION_STROKE` | no | Outline. Default is black behind white type, or white behind black type. Width example: `#000000 3`. |
 | `CAPTION_SIZE` | no | Caption point size. Default scales with frame width so a short cue covers about 75% of the width, and stays smaller than the title. |
-| `CAPTION_POSITION` | no | `center` (default), `bottom`, or `top`. `middle` is the same as `center`. |
+| `CAPTION_POSITION` | no | `two_fifths` (talking default: top of the line at 0.4 × frame height, still horizontally centered), `center`, `bottom`, or `top`. `middle` is the same as `center`. `0.4`, `two-fifths`, and `2/5` are the same as `two_fifths`. A non-talking brief that omits the field stays at `center`. |
 | `CAPTION_FONT` | no | Caption face. Falls back to `FONT`. |
 
 `talking` favours speech and keywords, and plays clips in name order, then
@@ -236,8 +239,9 @@ After the clips are joined, `STYLE: talking` runs one more local pass on
   otherwise the regular face is used.
 - **Captions** for speech between the title and the call to action.
   A line still being said when the title clears starts then, not after
-  a delay for the next word. Default position is the center of the frame,
-  about four words, one line on screen. The size scales with the frame so a short
+  a delay for the next word. Default position is two-fifths of the frame
+  height from the top (Y ≈ 0.4 × height), horizontally centered, about four
+  words, one line on screen. The size scales with the frame so a short
   cue covers about 75% of the width, and stays smaller than the title.
   Type is white with a black stroke and no box. A phrase that would
   overflow is the next timed cue, not a second line. The engine is
@@ -363,10 +367,11 @@ python -m modules.club "/path/to/lisa-clips"
 ```
 
 On `draft.mp4`: the title is the who/what line, bold white, horizontally
-centered, with no stroke and no bar. Captions sit in the center, white
-with a black stroke, one line at a time, covering about 75% of the
-width on a short cue. A wide phrase is the next cue. Those words are
-the Whisper cues, not the title.
+centered, with no stroke and no bar. Captions sit at two-fifths of the
+frame height from the top, horizontally centered, white with a black
+stroke, one line at a time, covering about 75% of the width on a short
+cue. A wide phrase is the next cue. Those words are the Whisper cues,
+not the title.
 `cuts.json` lists them under `captions.cues`.
 
 If the folder is one lesson mic, level is not used to hide a clip. Check

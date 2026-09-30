@@ -8,8 +8,9 @@ The middle is whatever was said. The title is bold white with no stroke.
 A call to action, when the brief sets one, uses that same look at a
 slightly smaller size. Captions are one line, white with a black stroke,
 sized so a short cue covers about three quarters of the frame width, and
-still smaller than the title. A phrase that would overflow becomes the
-next timed cue. Brief ``COLORS`` do not tint them.
+still smaller than the title. When ``CAPTION_POSITION`` is omitted they
+start at two-fifths of the frame height from the top. A phrase that would
+overflow becomes the next timed cue. Brief ``COLORS`` do not tint them.
 
 Local Whisper only. ``faster-whisper`` is used when it is installed;
 otherwise the ``openai-whisper`` package already required by the app.
@@ -43,6 +44,11 @@ CAPTION_CHARS = 42
 CAPTION_TYPICAL_CHARS = 18
 CAPTION_WIDTH_SHARE = 0.75
 CAPTION_EM = 0.55
+
+# Default vertical place when a talking brief omits ``CAPTION_POSITION``.
+# Fraction of frame height from the top to the top of the caption line.
+# Higher than the middle (0.5) and below the top third.
+CAPTION_Y_TWO_FIFTHS = 0.4
 
 
 @dataclass(frozen=True)
@@ -266,14 +272,27 @@ def _ass_text(text: str) -> str:
                 .replace("\n", r"\N"))
 
 
-def _alignment(position: str) -> int:
+def caption_anchor(position: str, height: int) -> tuple[int, int]:
+    """ASS ``(Alignment, MarginV)`` for a caption position.
+
+    ``two_fifths`` uses top-center alignment, so MarginV is the distance
+    from the top of the frame to the top of the line. That margin is
+    ``CAPTION_Y_TWO_FIFTHS`` of the height: the line starts at
+    Y ≈ 0.4 × height. The center column of alignment 8 keeps the line
+    horizontally centered. ``center`` and ``middle`` stay at mid-frame
+    (alignment 5, MarginV 0). ``top`` and ``bottom`` keep a 48px edge
+    margin.
+    """
+    height = max(int(height), 1)
+    if position == "two_fifths":
+        return 8, int(round(height * CAPTION_Y_TWO_FIFTHS))
     if position in ("middle", "center"):
-        return 5
+        return 5, 0
     if position == "top":
-        return 8
+        return 8, 48
     if position == "bottom":
-        return 2
-    return 5
+        return 2, 48
+    return 5, 0
 
 
 def default_caption_size(width: int, height: int) -> int:
@@ -370,12 +389,18 @@ def caption_style(brief: Brief, width: int, height: int) -> dict:
     stroke = f"#{stroke_ink}"
     size = brief.caption_size or default_caption_size(width, height)
     width = brief.caption_stroke_width or max(1, min(3, size // 8))
+    position = brief.caption_position or (
+        "two_fifths" if brief.style == "talking" else "center"
+    )
+    align, margin_v = caption_anchor(position, height)
     return {
         "color": color,
         "stroke": stroke,
         "stroke_width": width,
         "size": size,
-        "position": brief.caption_position or "center",
+        "position": position,
+        "alignment": align,
+        "margin_v": margin_v,
     }
 
 
@@ -416,8 +441,8 @@ def render_ass(cues: list[CaptionCue], brief: Brief, *, width: int, height: int,
     """An ASS script of the spoken lines. Title and CTA are not in here."""
     style = caption_style(brief, width, height)
     face, _folder = _font_face(brief, font_path)
-    align = _alignment(style["position"])
-    margin_v = 0 if style["position"] in ("middle", "center") else 48
+    align = style["alignment"]
+    margin_v = style["margin_v"]
     header = "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
